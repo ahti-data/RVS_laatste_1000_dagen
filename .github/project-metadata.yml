@@ -1,0 +1,26 @@
+project_name: "RVS_laatste_1000_dagen"
+description: "Project analyzing the last 1000 days that people live. The goal of the project is to gain more insights into the last 1000 days, and where potential improvement-of-life policies could help overtreatment of individuals"
+repository_owner: "ahti-data"
+source_upload_name: "iteration_2"
+output_upload_name: "disabled"
+linked_pdfs:
+  - "huisartsdeclaraties"
+  - "MSZPrestatiesVeKT"
+  - "personenmetgebruikvanzvwwijkverpleging"
+  - "zvw-eerstelijnsverblijf"
+source_files:
+  - "src-laatstse_1000_dagen/00_inputs.R"
+  - "src-laatstse_1000_dagen/00_review_comments.R"
+  - "src-laatstse_1000_dagen/01_clean_demographic_characteristics.R"
+  - "src-laatstse_1000_dagen/02_find_random_matches.R"
+  - "src-laatstse_1000_dagen/03a_clean_annual_healthcosts.R"
+  - "src-laatstse_1000_dagen/03b_clean_continuous_healthcosts.R"
+  - "src-laatstse_1000_dagen/03c_clean_dbc_codes.R"
+  - "src-laatstse_1000_dagen/03d_find_wlz_msz.R"
+  - "src-laatstse_1000_dagen/05a_make_aggregations.R"
+  - "src-laatstse_1000_dagen/05b_make_output_wlz_msz.R"
+  - "src-laatstse_1000_dagen/05c_make_final_output.R"
+  - "src-laatstse_1000_dagen/06_internal_quality_checks.R"
+  - "src-laatstse_1000_dagen/src-laatste_1000_dagen.odt"
+output_files:
+  - 'None'
