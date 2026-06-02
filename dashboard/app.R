@@ -1389,11 +1389,17 @@ server <- function(input, output, session) {
     req(metric_col %in% names(df))
     lbl <- if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(df$mszzorgactiviteitomschrijving) else as.character(df$vektmszdeclaratiecode %||% "")
     lbl_short <- stringr::str_trunc(lbl, 70)
+    rank_val <- if ("ranking" %in% names(df)) as.character(df$ranking) else as.character(seq_len(nrow(df)))
+    label_display <- lbl_short
+    dup <- duplicated(label_display) | duplicated(label_display, fromLast = TRUE)
+    if (any(dup, na.rm = TRUE)) {
+      label_display[dup] <- paste0(label_display[dup], " (#", rank_val[dup], ")")
+    }
 
     out <- df |>
       dplyr::mutate(
         label_full = lbl,
-        label_short = lbl_short,
+        label_short = label_display,
         value_num = numericize(.data[[metric_col]]),
         pop_value = numericize(.data[["n_totaal_population"]] %||% NA_real_),
         tooltip = paste0(
@@ -1424,9 +1430,16 @@ server <- function(input, output, session) {
     df <- it3_top50_filtered()
     metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
     df_lbl <- df |>
-      dplyr::mutate(lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70))
+      dplyr::mutate(
+        lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70),
+        rank_val = if ("ranking" %in% names(df)) as.character(ranking) else as.character(row_number())
+      )
     if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
-    label_levels <- df_lbl |> dplyr::pull(lbl) |> unique()
+    lbl_vec <- df_lbl |> dplyr::pull(lbl)
+    rank_vec <- df_lbl |> dplyr::pull(rank_val)
+    dup <- duplicated(lbl_vec) | duplicated(lbl_vec, fromLast = TRUE)
+    if (any(dup, na.rm = TRUE)) lbl_vec[dup] <- paste0(lbl_vec[dup], " (#", rank_vec[dup], ")")
+    label_levels <- unique(lbl_vec)
     # Show rank 1 at top after coord_flip()
     label_levels <- rev(label_levels)
 
@@ -1454,9 +1467,16 @@ server <- function(input, output, session) {
     validate(need(compare_col %in% names(df), paste0("Vergelijkingskolom ontbreekt: ", compare_col)))
 
     df_lbl <- df |>
-      dplyr::mutate(lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70))
+      dplyr::mutate(
+        lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70),
+        rank_val = if ("ranking" %in% names(df)) as.character(ranking) else as.character(row_number())
+      )
     if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
-    label_levels <- df_lbl |> dplyr::pull(lbl) |> unique()
+    lbl_vec <- df_lbl |> dplyr::pull(lbl)
+    rank_vec <- df_lbl |> dplyr::pull(rank_val)
+    dup <- duplicated(lbl_vec) | duplicated(lbl_vec, fromLast = TRUE)
+    if (any(dup, na.rm = TRUE)) lbl_vec[dup] <- paste0(lbl_vec[dup], " (#", rank_vec[dup], ")")
+    label_levels <- unique(lbl_vec)
     label_levels <- rev(label_levels)
 
     df_plot <- it3_top50_plot_df(df, compare_col, label_prefix = paste0("Vergelijking: ", compare_col), label_levels = label_levels)
