@@ -1,0 +1,1235 @@
+cat("\n========== RVS TOOL APP STARTUP ==========\n")
+cat(paste0("Time: ", Sys.time(), "\n"))
+cat(paste0("Working directory: ", getwd(), "\n"))
+cat("=============================================\n\n")
+flush.console()
+
+# ===== PACKAGE MANAGEMENT: Install & Load =====
+cat("[STARTUP] Installing and loading required packages...\n")
+flush.console()
+
+packages <- c(
+  "shiny",
+  "readxl",
+  "dplyr",
+  "tidyr",
+  "ggplot2",
+  "purrr",
+  "plotly",
+  "tibble"
+)
+
+# Identify packages that are not yet installed
+new_packages <- packages[!(packages %in% installed.packages()[, "Package"])]
+
+# Install missing packages if any
+if (length(new_packages) > 0) {
+  cat(sprintf("[STARTUP] Installing missing packages: %s\n", paste(new_packages, collapse = ", ")))
+  flush.console()
+  install.packages(
+    new_packages,
+    lib = Sys.getenv("R_LIBS_USER"),
+    repos = "https://cran.r-project.org"
+  )
+  cat("[STARTUP] Package installation complete.\n")
+  flush.console()
+}
+
+# Load all required packages
+cat("[STARTUP] Loading packages...\n")
+flush.console()
+lapply(packages, library, character.only = TRUE)
+cat("[STARTUP] All packages loaded successfully.\n\n")
+flush.console()
+
+# ===== VARIABLE DECLARATIONS & UTILITIES =====
+
+if (getRversion() >= "2.15.1") {
+  utils::globalVariables(c(
+    "cohort", "died", "n_totaal", "value", "name", "type", "t",
+    "q05_per_persoon", "q25_per_persoon", "mediaan_per_persoon",
+    "q75_per_persoon", "q95_per_persoon", "bin_size", "doodsoorzaak",
+    "t_numeric", "value_butterfly", "group", "interventie", "interventie_category"
+  ))
+}
+
+data_path <- "data/data_iteration_1/all_output.xlsx"
+log_file <- "shiny_console.log"
+unlink(log_file)
+
+log_msg <- function(msg) {
+  cat(paste0("[", Sys.time(), "] ", msg, "\n"), file = log_file, append = TRUE)
+  cat(paste0("[", Sys.time(), "] ", msg, "\n"))
+}
+
+read_all_data <- function(path = data_path) {
+  if (!file.exists(path)) {
+    msg <- sprintf("[read_all_data] File not found: %s", path)
+    log_msg(msg)
+    return(tibble::tibble())
+  }
+  
+  sheets <- readxl::excel_sheets(path)
+  df <- purrr::map_dfr(sheets, ~ readxl::read_excel(path, sheet = .x, col_types = "text") %>%
+                         dplyr::mutate(across(c("cohort", "t", "died", "name", "type", "doodsoorzaak", "bin_size"), as.character),
+                                       value = as.numeric(value),
+                                       n_totaal = as.numeric(n_totaal)))
+  log_msg(sprintf("[read_all_data] Loaded %d rows from %d sheets", nrow(df), length(sheets)))
+  df
+}
+
+# Initialize data
+log_msg("[startup] Initializing data...")
+all_data_initial <- tryCatch(
+  read_all_data(data_path),
+  error = function(e) {
+    msg <- sprintf("[startup] read_all_data failed: %s", e$message)
+    log_msg(msg)
+    tibble::tibble()
+  }
+)
+
+base_names <- if (nrow(all_data_initial) > 0) {
+  sort(unique(all_data_initial$name[!startsWith(all_data_initial$name, "gebruik") & !startsWith(all_data_initial$name, "heeft")]))
+} else {
+  character(0)
+}
+
+doodsoorzaken <- if (nrow(all_data_initial) > 0) {
+  c("all", sort(unique(all_data_initial$doodsoorzaak[all_data_initial$doodsoorzaak != "all"])))
+} else {
+  "all"
+}
+
+log_msg(sprintf("[startup] Initialization complete: %d base names, %d doodsoorzaken", 
+                length(base_names), length(doodsoorzaken)))
+
+# ===== HELPER FUNCTIONS =====
+find_gebruikt_name <- function(name_choice, data) {
+  if (is.null(data) || nrow(data) == 0) return(NA_character_)
+  print(unique(data$name))
+
+  # Generate all possible naming conventions
+  candidates <- c(
+    paste0("gebruik", name_choice),         # gebruikbedragwlzzin
+    paste0("gebruikt_", name_choice),       # gebruik_bedragwlzzin
+    paste0(name_choice, "_gebruik"),        # bedragwlzzin_gebruik
+    paste0("heeft", name_choice),           # heeftbedragwlzzin
+    paste0("heeft_", name_choice),          # heeft_bedragwlzzin
+    paste0(name_choice, "_heeft")           # bedragwlzzin_heeft
+  )
+
+  valid <- intersect(candidates, unique(data$name))
+  if (length(valid) > 0) valid[[1]] else NA_character_
+}
+
+# Helper function: Map interventions to their constituent names
+get_interventie_categories <- function() {
+  list(
+    "AAA" = c("kosten_aaa_0303_0406_operatie", "kosten_aaa_0303_0406_totaal"),
+    "Heup" = c("kosten_heup_0303_0218_operatie", "kosten_heup_0303_0218_prothese", "kosten_heup_0303_0218_totaal",
+               "kosten_heup_0303_0219_operatie", "kosten_heup_0303_0219_totaal",
+               "kosten_heup_0305_3019_operatie", "kosten_heup_0305_3019_prothese", "kosten_heup_0305_3019_totaal",
+               "kosten_heup_0305_3020_operatie", "kosten_heup_0305_3020_totaal", "kosten_heupprothese"),
+    "IC" = c("kosten_add_on_ic"),
+    "Diagnostiek" = c("kosten_eerstelijn_zpk_4", "kosten_eerstelijn_zpk_7", "kosten_eerstelijn_zpk_8",
+                      "kosten_eerstelijn_zpk_9", "kosten_eerstelijn_zpk_10", "kosten_eerstelijn_zpk_11",
+                      "kosten_eerstelijn_zpk_4_7_11", "kosten_overig_tweedelijn_zpk_4", "kosten_overig_tweedelijn_zpk_7",
+                      "kosten_overig_tweedelijn_zpk_10", "kosten_overig_tweedelijn_zpk_11", "kosten_overig_tweedelijn_zpk_4_7_11"),
+    "Oncologie" = c("kosten_oncolgie_chemo", "kosten_oncolgie_immuno"),
+    "Polyfarmacie" = c("gebruikt_minstens5_atc4")
+  )
+}
+
+# Helper function: Get maatstaf options
+get_maatstaf_options <- function() {
+  c(
+    "Totale kosten" = "sum_totaal_groep",
+    "Kosten per persoon" = "gemiddelde_per_persoon",
+    "Aantal gebruikers" = "n_totaal_gebruikers",
+    "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
+    "Prevalentie per 100" = "prevalentie_per_100"
+  )
+}
+
+get_maatstaf_label <- function(value) {
+  labels <- get_maatstaf_options()
+  match_idx <- which(labels == value)
+  if (length(match_idx) > 0) names(labels)[match_idx[[1]]] else value
+}
+
+get_bin_size_label <- function(value) {
+  if (identical(value, "monthly")) return("Maandelijks")
+  if (identical(value, "1000days")) return("1000 dagen")
+  value
+}
+
+get_time_axis_label <- function(value) {
+  if (identical(value, "monthly")) return("Maanden voor overlijden (t)")
+  "Tijdsbin voor overlijden (t)"
+}
+
+# Helper function: Process measurements for standardized filtering
+process_measurements <- function(data, maatstaf, handle_prevalentie = TRUE) {
+  if (is.null(data) || nrow(data) == 0) return(tibble::tibble())
+
+  # If maatstaf is prevalentie_per_100, handle specially
+  if (handle_prevalentie && maatstaf == "prevalentie_per_100") {
+    # Prevalentie uses gebruik_ or heeft_ prefixed names with gemiddelde_per_persoon type
+    result <- data %>%
+      filter(type == "gemiddelde_per_persoon",
+             (startsWith(name, "gebruik") | startsWith(name, "heeft"))) %>%
+      mutate(type = "prevalentie_per_100")
+  } else {
+    # Standard filtering
+    result <- data %>% filter(type == maatstaf)
+  }
+
+  return(result)
+}
+
+# Helper function: Get all intervention variable names
+get_all_interventie_names <- function() {
+  cats <- get_interventie_categories()
+  unique(unlist(cats))
+}
+
+
+# ===== UI DEFINITION =====
+ui <- navbarPage(
+  title = "Laatste 1000 dagen: Iteratie 1",
+  id = "main_nav",
+  
+  # --- TAB 1: Basispopulatie ---
+  tabPanel("Basispopulatie",
+           sidebarLayout(
+             sidebarPanel(
+               h4("Filters"),
+               selectInput("pop_jaar", "Jarenselectie:", choices = c("2019", "2023", "2019 + 2023"), selected = "2019 + 2023"),
+               selectInput("pop_split", "Kies populaties:", choices = c("Enkel totale populatie", "Totaal + subgroepen doodsoorzaak"), selected = "Totaal + subgroepen doodsoorzaak"),
+               hr(),
+               downloadButton("dl_basis", "Download Data voor Think-cell")
+             ),
+             mainPanel(
+               plotlyOutput("plot_basispopulatie", height = "600px")
+             )
+           )
+  ),
+  
+  # --- TAB 2: Zorg Totaal ---
+  tabPanel("Zorg Totaal",
+           sidebarLayout(
+             sidebarPanel(
+               h4("Filters"),
+               selectInput("tot_pop", "Populatie:", choices = doodsoorzaken, selected = "all"),
+               selectInput("tot_bin_size", "Bin size:",
+                           choices = c("monthly", "1000days"),
+                           selected = "1000days"),
+               selectInput("tot_jaar", "Jaar:", choices = c("2019", "2023", "Beide"), selected = "2023"),
+               selectInput("tot_maatstaf", "Maatstaf:",
+                           choices = c("Totale kosten" = "sum_totaal_groep",
+                                       "Kosten per persoon" = "gemiddelde_per_persoon",
+                                       "Aantal gebruikers" = "n_totaal_gebruikers",
+                                       "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
+                                       "Prevalentie per 100" = "prevalentie_per_100"),
+                           selected = "gemiddelde_per_persoon"),
+               selectizeInput("tot_variables", "Zorgvariabelen:",
+                              choices = NULL,
+                              selected = NULL,
+                              multiple = TRUE,
+                              options = list(placeholder = "Alle (behalve interventies)")),
+               selectInput("tot_vgl", "Kies vergelijking:",
+                           choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"), 
+                           selected = "Overleden vs. In leven (Controle)"),
+               hr(),
+               downloadButton("dl_totaal", "Download Data voor Think-cell")
+             ),
+             mainPanel(
+               plotlyOutput("plot_zorg_totaal", height = "600px")
+             )
+           )
+  ),
+  
+  # --- TAB 3: Zorg over Tijd ---
+  tabPanel("Zorg over Tijd",
+           sidebarLayout(
+             sidebarPanel(
+               h4("Filters"),
+               selectizeInput("mnd_domein", "Zorgdomein (Variabele):", choices = base_names, selected = base_names[1], multiple = TRUE),
+               helpText("Meerdere selectie toont een stacked barchart in staafgrafiekmodus."),
+               selectInput("mnd_bin_size", "Bin size:",
+                           choices = c("monthly", "1000days"),
+                           selected = "monthly"),
+               selectInput("mnd_maatstaf", "Maatstaf:",
+                           choices = c("Totale kosten" = "sum_totaal_groep",
+                                       "Kosten per persoon" = "gemiddelde_per_persoon",
+                                       "Aantal gebruikers" = "n_totaal_gebruikers",
+                                       "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
+                                       "Prevalentie per 100" = "prevalentie_per_100"),
+                           selected = "gemiddelde_per_persoon"),
+               selectInput("mnd_jaar", "Jaar:", choices = c("2019", "2023", "Beide"), selected = "2023"),
+               selectInput("mnd_pop", "Populatie (Doodsoorzaak):", choices = doodsoorzaken, selected = "all"),
+               selectInput("mnd_vgl", "Kies status:", 
+                           choices = c("Alleen overleden" = "Overleden",
+                                       "Alleen in leven" = "In leven"), 
+                           selected = "Overleden"),
+               selectInput("mnd_grafiek", "Grafiektype:",
+                           choices = c("Staafgrafiek", "Lijngrafiek"),
+                           selected = "Staafgrafiek"),
+               selectInput("mnd_lijnmodus", "Lijngrafiek modus:",
+                           choices = c("Status (met/zonder controle)" = "status",
+                                       "Alle doodsoorzaken in 1 grafiek" = "doodsoorzaak",
+                                       "Totale populatie 2019 vs 2023" = "cohort"),
+                           selected = "status"),
+               selectizeInput("mnd_zichtbare_lijnen", "Zichtbare lijnen:",
+                              choices = NULL, selected = NULL, multiple = TRUE),
+               helpText("Tip: in lijngrafiekmodus kun je lijnen aan/uit zetten via 'Zichtbare lijnen'"),
+               hr(),
+               downloadButton("dl_maandelijks", "Download Data voor Think-cell")
+             ),
+             mainPanel(
+               plotlyOutput("plot_zorg_maandelijks", height = "600px")
+             )
+           )
+  ),
+  
+  # --- TAB 4: Costs Boxplot-like (Quantiles) ---
+  tabPanel("Kosten Boxplot",
+           sidebarLayout(
+             sidebarPanel(
+               h4("Filters"),
+               selectInput("cost_var", "Kies variabele (name):", choices = base_names, selected = base_names[1]),
+               selectInput("cost_bin_size", "Bin size:",
+                           choices = c("monthly", "1000days"),
+                           selected = "monthly"),
+               selectInput("cost_pop", "Populatie (Doodsoorzaak):",
+                           choices = doodsoorzaken,
+                           selected = "all"),
+               helpText("Boxplot-achtig overzicht op basis van quantielen per cohort en status.")
+             ),
+             mainPanel(
+               plotlyOutput("plot_cost", height = "600px")
+             )
+           )
+  ),
+  
+  # --- TAB 5: Zorg per Domein Butterfly ---
+  tabPanel("Zorg per Domein (Butterfly)",
+           sidebarLayout(
+             sidebarPanel(
+               h4("Filters"),
+               selectInput("butterfly_domein", "Zorgdomein:", choices = base_names, selected = base_names[1]),
+               selectInput("butterfly_maatstaf", "Maatstaf:",
+                           choices = c("Aantal gebruikers" = "n_totaal_gebruikers",
+                                       "Kosten per gebruiker" = "gemiddelde_per_persoon",
+                                       "Totale kosten" = "sum_totaal_groep",
+                                       "Kosten per gebruiker (alt)" = "gemiddelde_per_gebruiker",
+                                       "Prevalentie per 100" = "prevalentie_per_100"),
+                           selected = "gemiddelde_per_persoon"),
+               selectInput("butterfly_vgl", "Vergelijking (Links vs Rechts):",
+                           choices = c("Geobserveerd 2023 vs. Controle 2023" = "obs_2023_vs_ctrl_2023",
+                                       "Geobserveerd 2019 vs. Geobserveerd 2023" = "obs_2019_vs_obs_2023",
+                                       "Geobserveerd 2019 vs. Controle 2019" = "obs_2019_vs_ctrl_2019"),
+                           selected = "obs_2023_vs_ctrl_2023"),
+               hr(),
+               downloadButton("dl_butterfly", "Download Data voor Think-cell")
+             ),
+             mainPanel(
+               plotlyOutput("plot_butterfly", height = "700px")
+             )
+           )
+  ),
+
+  # --- TAB 6: Interventies Analysis ---
+  tabPanel("Interventies",
+           sidebarLayout(
+             sidebarPanel(
+               h4("Filters"),
+               selectizeInput("int_interventie", "Selecteer interventie variabele(s):",
+                              choices = get_all_interventie_names(),
+                              selected = get_all_interventie_names()[1],
+                              multiple = TRUE),
+               selectInput("int_maatstaf", "Maatstaf:",
+                           choices = get_maatstaf_options(),
+                           selected = "gemiddelde_per_persoon"),
+               selectInput("int_bin_size", "Bin size:",
+                           choices = c("monthly", "1000days"),
+                           selected = "1000days"),
+               selectInput("int_jaar", "Jaar:",
+                           choices = c("2019", "2023", "Beide"),
+                           selected = "2023"),
+               selectInput("int_vgl", "Vergelijking:",
+                           choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"),
+                           selected = "Overleden vs. In leven (Controle)"),
+               hr(),
+               downloadButton("dl_interventies", "Download Data voor Think-cell")
+             ),
+             mainPanel(
+               plotlyOutput("plot_interventies", height = "600px")
+             )
+           )
+  ),
+
+  # --- TAB 7: App Logs ---
+  tabPanel("Systeem Logs",
+           verbatimTextOutput("app_log")
+  )
+)
+
+# ===== SERVER DEFINITION =====
+server <- function(input, output, session) {
+  
+  error_log <- reactiveVal(character())
+  add_error <- function(msg) {
+    log_msg(msg)
+    error_log(c(error_log(), msg))
+  }
+  
+  # 1. Load Core Data Reactively
+  all_data <- reactive({
+    tryCatch({
+      df <- read_all_data(data_path)
+      df
+    }, error = function(e) {
+      add_error(sprintf("[reactive] all_data load failed: %s", e$message))
+      tibble::tibble()
+    })
+  })
+  
+  # ==========================================
+  # SERVER LOGIC: TAB 1 - Basispopulatie
+  # ==========================================
+  data_basis <- reactive({
+    req(nrow(all_data()) > 0)
+    df <- all_data() %>%
+      filter(bin_size == "1000days", type == "n_totaal_gebruikers") %>%
+      # Use zvwktotaal which has complete population data for all doodsoorzaken
+      filter(name == "zvwktotaal")
+    
+    if(input$pop_jaar != "2019 + 2023") {
+      df <- df %>% filter(cohort == as.numeric(input$pop_jaar))
+    }
+    
+    if(input$pop_split == "Enkel totale populatie") {
+      df <- df %>% filter(doodsoorzaak == "all")
+    }
+    
+    # Aggregate n_totaal
+    df %>%
+      group_by(cohort, doodsoorzaak, died) %>%
+      summarise(n_mensen = mean(n_totaal, na.rm=TRUE), .groups = "drop")
+  })
+  
+  output$plot_basispopulatie <- plotly::renderPlotly({
+    df <- data_basis()
+    p <- ggplot(df, aes(x = doodsoorzaak, y = n_mensen, fill = died)) +
+      geom_col(position = position_dodge()) +
+      facet_wrap(~cohort) +
+      coord_flip() +
+      theme_minimal() +
+      labs(title = "Basispopulatie", x = "Populatie / Doodsoorzaak", y = "Aantal")
+    plotly::ggplotly(p)
+  })
+  
+  output$dl_basis <- downloadHandler(
+    filename = function() { paste("basispopulatie-", Sys.Date(), ".csv", sep="") },
+    content = function(file) { write.csv2(data_basis(), file, row.names = FALSE) }
+  )
+  
+  # ==========================================
+  # SERVER LOGIC: TAB 2 - Zorg Totaal 1000 dgn
+  # ==========================================
+
+  # Update variable choices for tot_variables (exclude intervention variables and gebruik_/heeft_ by default)
+  observeEvent(nrow(all_data()) > 0, {
+    all_vars <- sort(unique(all_data()$name))
+    intervention_names <- get_all_interventie_names()
+    # Exclude interventies, gebruik_, and heeft_ prefixed variables
+    clean_vars <- all_vars[!all_vars %in% intervention_names &
+                           !startsWith(all_vars, "gebruik") &
+                           !startsWith(all_vars, "heeft")]
+    clean_vars <- sort(clean_vars)
+
+    updateSelectizeInput(
+      session,
+      "tot_variables",
+      choices = clean_vars,
+      selected = clean_vars,
+      server = TRUE
+    )
+  }, ignoreInit = FALSE)
+
+  data_totaal <- reactive({
+    req(nrow(all_data()) > 0)
+    df <- process_measurements(all_data(), input$tot_maatstaf) %>%
+      filter(bin_size == input$tot_bin_size,
+             doodsoorzaak == input$tot_pop)
+
+    # Handle variable filtering based on measurement type
+    if (input$tot_maatstaf == "prevalentie_per_100") {
+      # For prevalentie, only show gebruik_ and heeft_ prefixed variables
+      df <- df %>% filter(startsWith(name, "gebruik") | startsWith(name, "heeft"))
+    } else if (!is.null(input$tot_variables) && length(input$tot_variables) > 0) {
+      # For other measurements, filter by selected variables
+      df <- df %>% filter(name %in% input$tot_variables)
+    }
+
+    if(input$tot_jaar != "Beide") {
+      df <- df %>% filter(cohort == as.numeric(input$tot_jaar))
+    }
+    if(input$tot_vgl == "Geen vergelijking") {
+      df <- df %>% filter(died == "Overleden")
+    }
+
+    result <- df %>%
+      group_by(name, cohort, died) %>%
+      summarise(waarde = mean(value, na.rm=TRUE), .groups = "drop")
+
+    # Multiply by 100 for prevalentie_per_100 to convert from decimal to percentage
+    if (input$tot_maatstaf == "prevalentie_per_100") {
+      result <- result %>% mutate(waarde = waarde * 100)
+    }
+
+    result
+  })
+  
+  output$plot_zorg_totaal <- plotly::renderPlotly({
+    df <- data_totaal()
+    y_label <- if (input$tot_maatstaf == "prevalentie_per_100") "Prevalentie per 100" else "Waarde"
+    p <- ggplot(df, aes(x = reorder(name, waarde), y = waarde, fill = died)) +
+      geom_col(position = position_dodge()) +
+      facet_wrap(~cohort) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(
+        title = "Zorg Totaal",
+        subtitle = paste0(
+          "Maatstaf: ", get_maatstaf_label(input$tot_maatstaf),
+          " | Bin size: ", get_bin_size_label(input$tot_bin_size),
+          " | Populatie: ", input$tot_pop,
+          " | Jaar: ", input$tot_jaar,
+          " | Vergelijking: ", input$tot_vgl
+        ),
+        x = "Zorgdomein",
+        y = y_label
+      )
+    plotly::ggplotly(p)
+  })
+  
+  output$dl_totaal <- downloadHandler(
+    filename = function() { paste("zorg_totaal-", Sys.Date(), ".csv", sep="") },
+    content = function(file) { write.csv2(data_totaal(), file, row.names = FALSE) }
+  )
+  
+  # ==========================================
+  # SERVER LOGIC: TAB 3 - Zorg over Tijd
+  # ==========================================
+  data_maandelijks <- reactive({
+    req(nrow(all_data()) > 0)
+    selected_domains <- input$mnd_domein
+
+    if (is.null(selected_domains) || length(selected_domains) == 0) {
+      return(tibble::tibble())
+    }
+
+    df <- process_measurements(all_data(), input$mnd_maatstaf) %>%
+      filter(bin_size == input$mnd_bin_size)
+
+    # For prevalentie_per_100, map each selected base name to its gebruik_/heeft_ variant.
+    if (input$mnd_maatstaf == "prevalentie_per_100") {
+      monthly_parts <- lapply(selected_domains, function(selected_domain) {
+        target_name <- find_gebruikt_name(selected_domain, df)
+        if (is.na(target_name)) {
+          return(NULL)
+        }
+        df %>%
+          filter(name == target_name) %>%
+          mutate(selected_domein = selected_domain)
+      })
+      df <- dplyr::bind_rows(monthly_parts)
+    } else {
+      # For other measurements, use the selected domains directly
+      df <- df %>%
+        filter(name %in% selected_domains) %>%
+        mutate(selected_domein = name)
+    }
+
+    if (nrow(df) == 0) {
+      return(tibble::tibble())
+    }
+
+    if(input$mnd_jaar != "Beide") {
+      df <- df %>% filter(cohort == as.numeric(input$mnd_jaar))
+    }
+
+    if(input$mnd_pop == "all") {
+      df <- df %>% filter(doodsoorzaak == "all")
+    } else {
+      df <- df %>% filter(doodsoorzaak == input$mnd_pop)
+    }
+
+    df <- df %>% filter(died == input$mnd_vgl)
+
+    result <- df %>%
+      mutate(t_numeric = as.numeric(t)) %>%
+      arrange(desc(t_numeric))
+
+    # Multiply by 100 for prevalentie_per_100
+    if (input$mnd_maatstaf == "prevalentie_per_100") {
+      result <- result %>% mutate(value = value * 100)
+    }
+
+    result
+  })
+
+  data_maandelijks_lijn <- reactive({
+    req(nrow(all_data()) > 0)
+    selected_domains <- input$mnd_domein
+
+    if (is.null(selected_domains) || length(selected_domains) == 0) {
+      return(tibble::tibble())
+    }
+
+    selected_domain <- selected_domains[1]
+    df <- process_measurements(all_data(), input$mnd_maatstaf) %>%
+      filter(bin_size == input$mnd_bin_size)
+
+    # For prevalentie_per_100, use the first selected base name and resolve its variant.
+    if (input$mnd_maatstaf == "prevalentie_per_100") {
+      target_name <- find_gebruikt_name(selected_domain, df)
+      if (is.na(target_name)) {
+        # If no gebruik_/heeft_ variant found, return empty
+        return(tibble::tibble())
+      }
+      df <- df %>% filter(name == target_name)
+    } else {
+      # For other measurements, use the selected domain directly
+      df <- df %>% filter(name == selected_domain)
+    }
+
+    log_msg(sprintf("[data_maandelijks_lijn] Base: %d rows (domein=%s, maatstaf=%s)",
+                    nrow(df), selected_domain, input$mnd_maatstaf))
+
+    has_all_pop <- any(df$doodsoorzaak == "all", na.rm = TRUE)
+
+    if (input$mnd_lijnmodus == "doodsoorzaak") {
+      if(input$mnd_jaar != "Beide") {
+        df <- df %>% filter(cohort == as.numeric(input$mnd_jaar))
+      }
+      df <- df %>% filter(doodsoorzaak != "all", died == input$mnd_vgl)
+    } else if (input$mnd_lijnmodus == "cohort") {
+      if (has_all_pop) {
+        df <- df %>% filter(doodsoorzaak == "all")
+      }
+      if(input$mnd_jaar != "Beide") {
+        df <- df %>% filter(cohort == as.numeric(input$mnd_jaar))
+      }
+      df <- df %>% filter(died == input$mnd_vgl)
+    } else {
+      if(input$mnd_jaar != "Beide") {
+        df <- df %>% filter(cohort == as.numeric(input$mnd_jaar))
+      }
+      if(input$mnd_pop == "all") {
+        if (has_all_pop) {
+          df <- df %>% filter(doodsoorzaak == "all")
+        }
+      } else {
+        df <- df %>% filter(doodsoorzaak == input$mnd_pop)
+      }
+      df <- df %>% filter(died == input$mnd_vgl)
+    }
+
+    df <- df %>%
+      mutate(t_numeric = as.numeric(t)) %>%
+      filter(!is.na(t_numeric), !is.na(value)) %>%
+      arrange(t_numeric)
+
+    log_msg(sprintf("[data_maandelijks_lijn] Post-filter: %d rows", nrow(df)))
+    df
+  })
+
+  lijn_data_maandelijks <- reactive({
+    df <- data_maandelijks_lijn()
+    if (nrow(df) == 0) return(tibble::tibble())
+
+    if (input$mnd_lijnmodus == "doodsoorzaak") {
+      df <- df %>% mutate(lijn = doodsoorzaak)
+    } else if (input$mnd_lijnmodus == "cohort") {
+      df <- df %>% mutate(lijn = paste0("Cohort ", cohort, " - ", died))
+    } else {
+      df <- df %>% mutate(lijn = died)
+    }
+
+    df <- df %>%
+      mutate(lijn = trimws(as.character(lijn))) %>%
+      group_by(t_numeric, lijn) %>%
+      summarise(value = mean(value, na.rm = TRUE), .groups = "drop")
+
+    # Multiply by 100 for prevalentie_per_100 to convert from decimal to percentage
+    if (input$mnd_maatstaf == "prevalentie_per_100") {
+      df <- df %>% mutate(value = value * 100)
+    }
+
+    # DEBUG: Print summarized data
+    log_msg(sprintf("[lijn_data_maandelijks] Summary: %d rows, lijnen: %s",
+                    nrow(df), paste(unique(df$lijn), collapse=", ")))
+    df
+  })
+
+  lijn_choices_maandelijks <- reactive({
+    df <- data_maandelijks_lijn()
+    if (nrow(df) == 0) return(character(0))
+
+    if (input$mnd_lijnmodus == "doodsoorzaak") {
+      sort(unique(df$doodsoorzaak))
+    } else if (input$mnd_lijnmodus == "cohort") {
+      sort(unique(paste0("Cohort ", df$cohort, " - ", df$died)))
+    } else {
+      sort(unique(df$died))
+    }
+  })
+
+  observeEvent(list(lijn_choices_maandelijks(), input$mnd_grafiek), {
+    lijn_choices <- lijn_choices_maandelijks()
+
+    if (input$mnd_grafiek != "Lijngrafiek" || length(lijn_choices) == 0) {
+      freezeReactiveValue(input, "mnd_zichtbare_lijnen")
+      updateSelectizeInput(
+        session,
+        "mnd_zichtbare_lijnen",
+        choices = lijn_choices,
+        selected = character(0),
+        server = TRUE
+      )
+      return()
+    }
+
+    selected_lijnen <- isolate(input$mnd_zichtbare_lijnen)
+    if (is.null(selected_lijnen)) selected_lijnen <- character(0)
+
+    selected_lijnen <- intersect(selected_lijnen, lijn_choices)
+    if (length(selected_lijnen) == 0) {
+      selected_lijnen <- lijn_choices
+    }
+
+    freezeReactiveValue(input, "mnd_zichtbare_lijnen")
+    updateSelectizeInput(
+      session,
+      "mnd_zichtbare_lijnen",
+      choices = lijn_choices,
+      selected = selected_lijnen,
+      server = TRUE
+    )
+  }, ignoreInit = FALSE)
+  
+  output$plot_zorg_maandelijks <- plotly::renderPlotly({
+    if (input$mnd_grafiek == "Lijngrafiek") {
+      df <- lijn_data_maandelijks()
+      selected_domains <- input$mnd_domein
+      selected_domain <- if (!is.null(selected_domains) && length(selected_domains) > 0) selected_domains[1] else ""
+
+      input_selection <- input$mnd_zichtbare_lijnen
+      available_lijnen <- unique(df$lijn)
+
+      # Determine effective selection robustly
+      if (is.null(input_selection) || length(input_selection) == 0) {
+        selected_lijnen <- available_lijnen
+      } else {
+        # Check intersection with available lines to handle stale inputs
+        input_clean <- trimws(as.character(input_selection))
+        valid_selection <- intersect(input_clean, available_lijnen)
+
+        if (length(valid_selection) > 0) {
+          selected_lijnen <- valid_selection
+        } else {
+          # If input selects nothing valid (stale), fallback to showing all
+          selected_lijnen <- available_lijnen
+        }
+      }
+
+      log_msg(sprintf("[renderPlotly] Input: %s. Available: %s. Effective: %s",
+              paste(input_selection, collapse=","),
+              paste(available_lijnen, collapse=","),
+              paste(selected_lijnen, collapse=",")))
+
+      df <- df %>% filter(lijn %in% selected_lijnen)
+
+      if (nrow(df) == 0) {
+        log_msg("[renderPlotly] Empty DF after line filter")
+        p <- ggplot() +
+          geom_text(aes(0, 0, label = "Geen lijn-data beschikbaar voor de gekozen filters."), size = 5) +
+          xlab(NULL) + ylab(NULL) + theme_void()
+        return(plotly::ggplotly(p))
+      }
+
+      p <- ggplot(df, aes(x = t_numeric, y = value, color = lijn, group = lijn)) +
+        geom_line(linewidth = 1) +
+        geom_point(size = 2) +
+        theme_minimal() +
+        labs(
+          title = paste("Zorg over Tijd (Lijn):", selected_domain),
+          subtitle = paste0(
+            "Maatstaf: ", get_maatstaf_label(input$mnd_maatstaf),
+            " | Bin size: ", get_bin_size_label(input$mnd_bin_size),
+            " | Jaar: ", input$mnd_jaar,
+            " | Populatie: ", input$mnd_pop,
+            " | Modus: ", input$mnd_lijnmodus,
+            " | Status: ", input$mnd_vgl
+          ),
+          x = get_time_axis_label(input$mnd_bin_size),
+          y = if (input$mnd_maatstaf == "prevalentie_per_100") "Prevalentie per 100" else "Waarde",
+          color = "Lijn"
+        )
+    } else {
+      df <- data_maandelijks()
+      selected_domains <- input$mnd_domein
+
+      # Check if data is empty and show message
+      if (nrow(df) == 0) {
+        log_msg("[renderPlotly] No monthly data for this domain")
+        p <- ggplot() +
+          geom_text(aes(0, 0, label = "Geen maandelijkse data beschikbaar voor deze domein.\nControleer of de domein maandelijke metingen bevat."), size = 4) +
+          xlab(NULL) + ylab(NULL) + theme_void()
+        return(plotly::ggplotly(p))
+      }
+
+      if (length(selected_domains) > 1) {
+        df <- df %>%
+          mutate(stack_group = selected_domein)
+
+        p <- ggplot(df, aes(x = factor(t_numeric, levels = sort(unique(t_numeric))), y = value, fill = stack_group)) +
+          geom_col(position = "stack") +
+          theme_minimal() +
+          labs(
+            title = paste("Zorg over Tijd:", paste(selected_domains, collapse = ", ")),
+            subtitle = paste0(
+              "Maatstaf: ", get_maatstaf_label(input$mnd_maatstaf),
+              " | Bin size: ", get_bin_size_label(input$mnd_bin_size),
+              " | Jaar: ", input$mnd_jaar,
+              " | Populatie: ", input$mnd_pop,
+              " | Status: ", input$mnd_vgl
+            ),
+            x = get_time_axis_label(input$mnd_bin_size),
+            y = if (input$mnd_maatstaf == "prevalentie_per_100") "Prevalentie per 100" else "Waarde",
+            fill = "Groep"
+          )
+      } else {
+        p <- ggplot(df, aes(x = factor(t_numeric, levels = sort(unique(t_numeric))), y = value, fill = died)) +
+          geom_col(position = position_dodge()) +
+          theme_minimal() +
+          labs(
+            title = paste("Zorg over Tijd:", selected_domains[1]),
+            subtitle = paste0(
+              "Maatstaf: ", get_maatstaf_label(input$mnd_maatstaf),
+              " | Bin size: ", get_bin_size_label(input$mnd_bin_size),
+              " | Jaar: ", input$mnd_jaar,
+              " | Populatie: ", input$mnd_pop,
+              " | Status: ", input$mnd_vgl
+            ),
+            x = get_time_axis_label(input$mnd_bin_size),
+            y = if (input$mnd_maatstaf == "prevalentie_per_100") "Prevalentie per 100" else "Waarde"
+          )
+      }
+      if (input$mnd_jaar == "Beide") {
+        p <- p + facet_wrap(~cohort, nrow = 1)
+      }
+    }
+
+    plotly::ggplotly(p)
+  })
+  
+  output$dl_maandelijks <- downloadHandler(
+    filename = function() { paste("zorg_over_tijd-", Sys.Date(), ".csv", sep="") },
+    content = function(file) { write.csv2(data_maandelijks(), file, row.names = FALSE) }
+  )
+  
+  # ==========================================
+  # SERVER LOGIC: TAB 4 - Kosten Boxplot
+  # ==========================================
+  selected_data <- reactive({
+    log_msg(sprintf("[reactive] Filtering for cost_var: %s", input$cost_var))
+    data <- all_data()
+    if (nrow(data) == 0) {
+      log_msg("[reactive] selected_data: parent data is empty")
+      return(tibble::tibble())
+    }
+    if (!is.character(input$cost_var) || input$cost_var == "") {
+      log_msg("[reactive] selected_data: invalid input$cost_var")
+      return(tibble::tibble())
+    }
+
+    if (!is.null(input$cost_bin_size)) {
+      data <- data %>% filter(bin_size == input$cost_bin_size)
+    }
+    if (nrow(data) == 0) {
+      log_msg(sprintf("[reactive] selected_data: no rows after bin_size filter (%s)", input$cost_bin_size))
+      return(tibble::tibble())
+    }
+
+    if (!is.null(input$cost_pop)) {
+      data <- data %>% filter(doodsoorzaak == input$cost_pop)
+    }
+    if (nrow(data) == 0) {
+      log_msg(sprintf("[reactive] selected_data: no rows after doodsoorzaak filter (%s)", input$cost_pop))
+      return(tibble::tibble())
+    }
+
+    result <- data %>% filter(name == input$cost_var)
+    log_msg(sprintf("[reactive] selected_data result: %d rows", nrow(result)))
+    result
+  })
+
+  plot_cost_data <- reactive({
+    log_msg("[reactive] Computing plot_cost_data...")
+    tryCatch({
+      data <- selected_data()
+      if (nrow(data) == 0) {
+        log_msg("[reactive] plot_cost_data: selected_data is empty")
+        return(tibble::tibble())
+      }
+      
+      df <- data %>%
+        filter(type %in% c("q05_per_persoon", "q25_per_persoon", "mediaan_per_persoon", "q75_per_persoon", "q95_per_persoon")) %>%
+        group_by(cohort, died, t, type) %>%
+        summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+        tidyr::pivot_wider(
+          names_from = type,
+          values_from = value,
+          values_fn = mean,
+          values_fill = NA_real_
+        )
+
+      df <- df %>%
+        mutate(t = factor(as.numeric(t), levels = sort(unique(as.numeric(t))))) %>%
+        filter(!is.na(mediaan_per_persoon))
+      log_msg(sprintf("[reactive] plot_cost_data result: %d rows", nrow(df)))
+      df
+    }, error = function(e) {
+      msg <- sprintf("[plot_cost_data] failed: %s", e$message)
+      add_error(msg)
+      tibble::tibble()
+    })
+  })
+
+  output$plot_cost <- plotly::renderPlotly({
+    log_msg("[render] Rendering plot_cost with plotly...")
+    tryCatch({
+      df <- plot_cost_data()
+      if (nrow(df) == 0) {
+        log_msg("[render] plot_cost: no data available")
+        p <- ggplot() +
+          geom_text(aes(0, 0, label = "Geen kosten-data beschikbaar."), size = 5) +
+          xlab(NULL) + ylab(NULL) + theme_void()
+        return(plotly::ggplotly(p))
+      }
+
+      log_msg(sprintf("[render] plot_cost: rendering %d rows", nrow(df)))
+      p <- ggplot(df, aes(x = factor(t), group = died, color = died, fill = died)) +
+        geom_errorbar(aes(ymin = q05_per_persoon, ymax = q95_per_persoon),
+                      position = position_dodge(width = 0.8), width = 0.2) +
+        geom_crossbar(aes(y = mediaan_per_persoon, ymin = q25_per_persoon, ymax = q75_per_persoon),
+                      position = position_dodge(width = 0.8), width = 0.35, alpha = 0.35) +
+        geom_point(aes(y = mediaan_per_persoon), position = position_dodge(width = 0.8), size = 2) +
+        facet_wrap(~cohort, nrow = 1) +
+        labs(
+          title = paste("Kostenboxplot voor", input$cost_var),
+          x = "t", y = "Kosten (per persoon)",
+          color = "Status", fill = "Status"
+        ) +
+        theme_minimal() +
+        theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+      plotly::ggplotly(p)
+    }, error = function(e) {
+      msg <- sprintf("[plot_cost render] %s", e$message)
+      add_error(msg)
+      p <- ggplot() +
+        geom_text(aes(0, 0, label = "Plot failed to render."), size = 5) +
+        xlab(NULL) + ylab(NULL) + theme_void()
+      plotly::ggplotly(p)
+    })
+  })
+
+  # ==========================================
+  # SERVER LOGIC: TAB 5 - Zorg per Domein Butterfly
+  # ==========================================
+  data_butterfly <- reactive({
+    log_msg("[reactive] Computing butterfly data...")
+    tryCatch({
+      data <- all_data()
+      if (nrow(data) == 0) {
+        log_msg("[reactive] butterfly data: all_data is empty")
+        return(tibble::tibble())
+      }
+
+      # Filter for 1000 days, selected domain and measure using process_measurements
+      df <- process_measurements(data, input$butterfly_maatstaf) %>%
+        filter(bin_size == "1000days")
+
+      # For prevalentie_per_100, we need to find the gebruik_/heeft_ variant of the domain
+      if (input$butterfly_maatstaf == "prevalentie_per_100") {
+        target_name <- find_gebruikt_name(input$butterfly_domein, df)
+        if (is.na(target_name)) {
+          # If no gebruik_/heeft_ variant found, return empty
+          return(tibble::tibble())
+        }
+        df <- df %>% filter(name == target_name)
+      } else {
+        # For other measurements, use the selected domain directly
+        df <- df %>% filter(name == input$butterfly_domein)
+      }
+
+      if (nrow(df) == 0) {
+        log_msg("[reactive] butterfly: no data for selected filters")
+        return(tibble::tibble())
+      }
+
+      # Parse comparison choice and create left/right groups
+      if (input$butterfly_vgl == "obs_2023_vs_ctrl_2023") {
+        # Left: Observed 2023, Right: Control 2023
+        left_filter <- df %>% filter(cohort == "2023", died == "Overleden")
+        right_filter <- df %>% filter(cohort == "2023", died == "In leven")
+        left_label <- "Observed 2023"
+        right_label <- "Control 2023"
+      } else if (input$butterfly_vgl == "obs_2019_vs_obs_2023") {
+        # Left: Observed 2019, Right: Observed 2023
+        left_filter <- df %>% filter(cohort == "2019", died == "Overleden")
+        right_filter <- df %>% filter(cohort == "2023", died == "Overleden")
+        left_label <- "Observed 2019"
+        right_label <- "Observed 2023"
+      } else if (input$butterfly_vgl == "obs_2019_vs_ctrl_2019") {
+        # Left: Observed 2019, Right: Control 2019
+        left_filter <- df %>% filter(cohort == "2019", died == "Overleden")
+        right_filter <- df %>% filter(cohort == "2019", died == "In leven")
+        left_label <- "Observed 2019"
+        right_label <- "Control 2019"
+      }
+
+      # Aggregate by doodsoorzaak
+      left_agg <- left_filter %>%
+        group_by(doodsoorzaak) %>%
+        summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+        mutate(group = left_label, value_butterfly = -value)
+
+      right_agg <- right_filter %>%
+        group_by(doodsoorzaak) %>%
+        summarise(value = mean(value, na.rm = TRUE), .groups = "drop") %>%
+        mutate(group = right_label, value_butterfly = value)
+
+      result <- bind_rows(left_agg, right_agg) %>%
+        arrange(doodsoorzaak)
+
+      # Multiply by 100 for prevalentie_per_100 to convert from decimal to percentage
+      if (input$butterfly_maatstaf == "prevalentie_per_100") {
+        result <- result %>% mutate(value_butterfly = value_butterfly * 100)
+      }
+
+      log_msg(sprintf("[reactive] butterfly data computed: %d rows", nrow(result)))
+      result
+    }, error = function(e) {
+      msg <- sprintf("[butterfly data] failed: %s", e$message)
+      add_error(msg)
+      tibble::tibble()
+    })
+  })
+  
+  output$plot_butterfly <- plotly::renderPlotly({
+    log_msg("[render] Rendering butterfly chart...")
+    tryCatch({
+      df <- data_butterfly()
+      if (nrow(df) == 0) {
+        log_msg("[render] butterfly: no data available")
+        p <- ggplot() +
+          geom_text(aes(0, 0, label = "Geen data beschikbaar voor butterfly chart."), size = 5) +
+          xlab(NULL) + ylab(NULL) + theme_void()
+        return(plotly::ggplotly(p))
+      }
+      
+      # Pivot to get left and right values side by side
+      pivot_df <- df %>%
+        pivot_wider(
+          names_from = group,
+          values_from = value_butterfly,
+          values_fill = 0
+        ) %>%
+        mutate(doodsoorzaak = factor(doodsoorzaak, levels = sort(unique(doodsoorzaak))))
+      
+      # Get group names dynamically
+      group_cols <- setdiff(colnames(pivot_df), c("doodsoorzaak", "value"))
+      
+      log_msg(sprintf("[render] butterfly: rendering %d rows with groups: %s", nrow(pivot_df), paste(group_cols, collapse=", ")))
+      
+      if (length(group_cols) < 2) {
+        p <- ggplot() +
+          geom_text(aes(0, 0, label = "Onvoldoende data voor vergelijking."), size = 5) +
+          xlab(NULL) + ylab(NULL) + theme_void()
+        return(plotly::ggplotly(p))
+      }
+      
+      left_col <- group_cols[1]
+      right_col <- group_cols[2]
+      
+      # Create butterfly chart with both sides
+      p <- ggplot(pivot_df) +
+        geom_col(aes(x = !!sym(left_col), y = doodsoorzaak, fill = left_col), 
+                 position = "identity", alpha = 0.8) +
+        geom_col(aes(x = !!sym(right_col), y = doodsoorzaak, fill = right_col), 
+                 position = "identity", alpha = 0.8) +
+        geom_vline(xintercept = 0, linetype = "solid", color = "black", size = 1) +
+        scale_x_continuous(labels = function(x) abs(x)) +
+        labs(
+          title = paste("Zorg per Domein:", input$butterfly_domein),
+          subtitle = paste("Maatstaf:", input$butterfly_maatstaf),
+          x = "Waarde (absolute schaal)", y = "Populatie / Doodsoorzaak",
+          fill = "Groep"
+        ) +
+        theme_minimal() +
+        theme(
+          legend.position = "bottom",
+          axis.text.y = element_text(size = 10),
+          plot.title = element_text(face = "bold")
+        )
+      
+      plotly::ggplotly(p)
+    }, error = function(e) {
+      msg <- sprintf("[butterfly render] %s", e$message)
+      add_error(msg)
+      p <- ggplot() +
+        geom_text(aes(0, 0, label = "Butterfly chart render error."), size = 5) +
+        xlab(NULL) + ylab(NULL) + theme_void()
+      plotly::ggplotly(p)
+    })
+  })
+  
+  output$dl_butterfly <- downloadHandler(
+    filename = function() { paste("zorg_butterfly-", Sys.Date(), ".csv", sep="") },
+    content = function(file) { write.csv2(data_butterfly(), file, row.names = FALSE) }
+  )
+
+  # ==========================================
+  # SERVER LOGIC: TAB 6 - Interventies
+  # ==========================================
+  data_interventies <- reactive({
+    req(nrow(all_data()) > 0)
+    selected_interventies <- input$int_interventie
+
+    if (is.null(selected_interventies) || length(selected_interventies) == 0) {
+      return(tibble::tibble())
+    }
+
+    # Use process_measurements to handle the maatstaf filtering
+    df <- process_measurements(all_data(), input$int_maatstaf) %>%
+      filter(bin_size == input$int_bin_size,
+             doodsoorzaak == "all")
+
+    # Filter by all selected variable names
+    if (input$int_maatstaf == "prevalentie_per_100") {
+      # For prevalentie, find the "gebruik_" or "heeft_" variants of selected names
+      matching_names <- c()
+      for (selected_name in selected_interventies) {
+        variant <- find_gebruikt_name(selected_name, df)
+        if (!is.na(variant)) {
+          matching_names <- c(matching_names, variant)
+        }
+      }
+      if (length(matching_names) == 0) {
+        # No prevalentie data for selected variables
+        return(tibble::tibble())
+      }
+      df <- df %>% filter(name %in% matching_names)
+    } else {
+      # For other measurements, filter by all selected names
+      df <- df %>%
+        filter(name %in% selected_interventies,
+               !startsWith(name, "gebruik") & !startsWith(name, "heeft"))
+    }
+
+    if (nrow(df) == 0) {
+      log_msg(sprintf("[data_interventies] No data for selected interventies, maatstaf=%s",
+                      input$int_maatstaf))
+      return(tibble::tibble())
+    }
+
+    if (input$int_jaar != "Beide") {
+      df <- df %>% filter(cohort == as.numeric(input$int_jaar))
+    }
+
+    # Apply comparison filter
+    if (input$int_vgl == "Geen vergelijking") {
+      df <- df %>% filter(died == "Overleden")
+    } else if (input$int_vgl == "Geobserveerd 2019 vs. Geobserveerd 2023") {
+      df <- df %>% filter(died == "Overleden")
+    }
+    # else: "Geobserveerd vs. Controle" - keep both
+
+    result <- df %>%
+      mutate(waarde = value)
+
+    # Multiply by 100 for prevalentie_per_100 to convert from decimal to percentage
+    if (input$int_maatstaf == "prevalentie_per_100") {
+      result <- result %>% mutate(waarde = waarde * 100)
+    }
+
+    result
+  })
+
+  output$plot_interventies <- plotly::renderPlotly({
+    df <- data_interventies()
+    if (nrow(df) == 0) {
+      p <- ggplot() +
+        geom_text(aes(0, 0, label = "Geen data beschikbaar voor deze interventie.\nControleer of de interventie data bevat voor de gekozen filters."), size = 4) +
+        xlab(NULL) + ylab(NULL) + theme_void()
+      return(plotly::ggplotly(p))
+    }
+
+    p <- ggplot(df, aes(x = name, y = waarde, fill = died)) +
+      geom_col(position = position_dodge()) +
+      theme_minimal() +
+      theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+      labs(
+        title = "Curatieve Interventies",
+        subtitle = paste0(
+          "Maatstaf: ", get_maatstaf_label(input$int_maatstaf),
+          " | Bin size: ", get_bin_size_label(input$int_bin_size),
+          " | Jaar: ", input$int_jaar,
+          " | Vergelijking: ", input$int_vgl
+        ),
+        x = "Interventie",
+        y = if (input$int_maatstaf == "prevalentie_per_100") "Prevalentie per 100" else "Waarde",
+        fill = "Status"
+      )
+
+    if (input$int_jaar == "Beide") {
+      p <- p + facet_wrap(~cohort, nrow = 1)
+    }
+
+    plotly::ggplotly(p)
+  })
+
+  output$dl_interventies <- downloadHandler(
+    filename = function() { paste("interventies-", Sys.Date(), ".csv", sep="") },
+    content = function(file) { write.csv2(data_interventies(), file, row.names = FALSE) }
+  )
+
+  # ==========================================
+  # SERVER LOGIC: TAB 7 - Logs
+  # ==========================================
+  output$app_log <- renderText({
+    errors <- error_log()
+    if (length(errors) > 0) paste("=== ERROR LOG ===\n", paste(errors, collapse = "\n"))
+    else "=== NO ERRORS ===\nApp is running normally."
+  })
+}
+
+# Run the app (Using your existing wrapper)
+options(shiny.error = function() {
+  err <- geterrmessage()
+  message(sprintf("[shiny.error] %s", err))
+  writeLines(sprintf("[shiny.error] %s", err), con = "shiny_error.log")
+})
+
+if (exists("secure_app", mode = "function") && exists("secure_server", mode = "function")) {
+  shinyApp(ui = secure_app(ui), server = server)
+} else {
+  shinyApp(ui, server)
+}
