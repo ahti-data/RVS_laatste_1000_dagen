@@ -737,6 +737,70 @@ iteration2_panels <- function() {
   )
 }
 
+#
+# ===== ITERATIE 3 HELPERS / DATA (inlined) =====
+#
+
+pick_first_existing <- function(paths) {
+  hit <- paths[file.exists(paths)]
+  if (length(hit) == 0) NA_character_ else hit[[1]]
+}
+
+resolve_iteration3_file <- function(pattern) {
+  dirs <- c(
+    "dashboard/data/data_iteration_3",
+    "data/data_iteration_3"
+  )
+  dirs <- dirs[dir.exists(dirs)]
+  candidates <- character(0)
+  for (d in dirs) {
+    globs <- Sys.glob(file.path(d, pattern))
+    globs <- globs[!grepl("^~\\$", basename(globs))] # ignore Excel lock files
+    candidates <- c(candidates, globs)
+  }
+  pick_first_existing(unique(candidates))
+}
+
+read_iteration3_xlsx <- function(path) {
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) return(tibble::tibble())
+  df <- readxl::read_excel(path, .name_repair = "unique")
+  df <- dplyr::as_tibble(df)
+
+  num_cols <- intersect(
+    c(
+      "t",
+      "n_totaal_gebruikers",
+      "n_totaal_declaraties",
+      "sum_totaal_groep",
+      "median_cost_per_declaratie",
+      "n_totaal_population",
+      "ranking",
+      "n_totaal_gebruikers_30d",
+      "sum_totaal_groep_30d",
+      "median_cost_per_declaratie_30d",
+      "n_totaal_gebruikers_Overleden",
+      "sum_totaal_groep_Overleden",
+      "median_cost_per_declaratie_Overleden",
+      "n_totaal_gebruikers_In_leven",
+      "sum_totaal_groep_In_leven",
+      "median_cost_per_declaratie_In_leven",
+      "n_totaal_gebruikers_1000d",
+      "sum_totaal_groep_1000d",
+      "median_cost_per_declaratie_1000d"
+    ),
+    names(df)
+  )
+  for (col in num_cols) df[[col]] <- numericize(df[[col]])
+
+  df
+}
+
+data_path_iteration3_zpk <- resolve_iteration3_file("*zpk_categorieen_tellingen*.xlsx")
+data_path_iteration3_top50 <- resolve_iteration3_file("*top50_activiteiten*.xlsx")
+
+it3_zpk_raw <- read_iteration3_xlsx(data_path_iteration3_zpk)
+it3_top50_raw <- read_iteration3_xlsx(data_path_iteration3_top50)
+
 
 # ===== VARIABLE DECLARATIONS & UTILITIES =====
 
@@ -749,7 +813,10 @@ if (getRversion() >= "2.15.1") {
   ))
 }
 
-data_path <- "data/data_iteration_1/all_output.xlsx"
+data_path <- resolve_existing_path(c(
+  "dashboard/data/data_iteration_1/all_output.xlsx",
+  "data/data_iteration_1/all_output.xlsx"
+))
 log_file <- "shiny_console.log"
 unlink(log_file)
 
@@ -1079,6 +1146,78 @@ ui <- navbarPage(
     "Iteratie 2",
     iteration2_header(),
     do.call(tabsetPanel, c(id = "iter2_tabs", iteration2_panels()))
+  ),
+
+  tabPanel(
+    "Iteratie 3",
+    tabsetPanel(
+      id = "iter3_tabs",
+      tabPanel(
+        "ZPK categorieën tellingen",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_zpk_died", "Populatie (died)", choices = NULL),
+            selectInput("it3_zpk_cohort", "Cohort", choices = NULL),
+            selectInput("it3_zpk_setting", "Setting (vektmszsettingzpk)", choices = NULL),
+            selectInput("it3_zpk_bin", "Bin size", choices = NULL),
+            radioButtons(
+              "it3_zpk_metric",
+              "Kies variabele",
+              choices = c(
+                "Aantal gebruikers" = "n_totaal_gebruikers",
+                "Aantal declaraties" = "n_totaal_declaraties",
+                "Totale kosten" = "sum_totaal_groep",
+                "Mediaan kosten per declaratie" = "median_cost_per_declaratie"
+              ),
+              selected = "n_totaal_gebruikers"
+            )
+          ),
+          mainPanel(
+            width = 9,
+            plotlyOutput("it3_plot_zpk", height = "720px"),
+            br(),
+            downloadButton("it3_dl_zpk", "Gegevens downloaden")
+          )
+        )
+      ),
+      tabPanel(
+        "Top 50 activiteiten",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_top50_ranked_by", "Ranked by", choices = NULL),
+            radioButtons(
+              "it3_top50_metric",
+              "Kies variabele",
+              choices = c(
+                "Aantal gebruikers" = "n_totaal_gebruikers",
+                "Aantal declaraties" = "n_totaal_declaraties",
+                "Totale kosten" = "sum_totaal_groep",
+                "Mediaan kosten per declaratie" = "median_cost_per_declaratie"
+              ),
+              selected = "n_totaal_gebruikers"
+            ),
+            selectInput(
+              "it3_top50_compare_group",
+              "Comparison group",
+              choices = c("bin size", "died"),
+              selected = "died"
+            )
+          ),
+          mainPanel(
+            width = 9,
+            h4(textOutput("it3_top50_title")),
+            fluidRow(
+              column(9, plotlyOutput("it3_plot_top50_main", height = "820px")),
+              column(3, plotlyOutput("it3_plot_top50_compare", height = "820px"))
+            ),
+            br(),
+            downloadButton("it3_dl_top50", "Gegevens downloaden")
+          )
+        )
+      )
+    )
   )
 )
 
@@ -1102,6 +1241,267 @@ server <- function(input, output, session) {
     })
   })
   
+  # ==========================================
+  # SERVER LOGIC: ITERATIE 3
+  # ==========================================
+
+  observe({
+    # ZPK categorieën tellingen
+    if (!is.null(it3_zpk_raw) && nrow(it3_zpk_raw) > 0) {
+      if ("died" %in% names(it3_zpk_raw)) {
+        died_vals <- ordered_values(it3_zpk_raw$died)
+        updateSelectInput(session, "it3_zpk_died", choices = died_vals, selected = died_vals[[1]])
+      }
+      if ("cohort" %in% names(it3_zpk_raw)) {
+        cohort_vals <- ordered_values(it3_zpk_raw$cohort)
+        updateSelectInput(session, "it3_zpk_cohort", choices = cohort_vals, selected = if ("2023" %in% cohort_vals) "2023" else cohort_vals[[1]])
+      }
+      if ("vektmszsettingzpk" %in% names(it3_zpk_raw)) {
+        setting_vals <- ordered_values(it3_zpk_raw$vektmszsettingzpk)
+        updateSelectInput(session, "it3_zpk_setting", choices = setting_vals, selected = setting_vals[[1]])
+      }
+      if ("bin_size" %in% names(it3_zpk_raw)) {
+        bin_vals <- ordered_values(it3_zpk_raw$bin_size)
+        updateSelectInput(session, "it3_zpk_bin", choices = bin_vals, selected = bin_vals[[1]])
+      }
+    }
+
+    # Top 50 activiteiten
+    if (!is.null(it3_top50_raw) && nrow(it3_top50_raw) > 0 && "ranked_by" %in% names(it3_top50_raw)) {
+      ranked_vals <- ordered_values(it3_top50_raw$ranked_by)
+      updateSelectInput(session, "it3_top50_ranked_by", choices = ranked_vals, selected = ranked_vals[[1]])
+    }
+  })
+
+  it3_zpk_filtered <- reactive({
+    df <- it3_zpk_raw
+    req(!is.null(df), nrow(df) > 0)
+
+    if ("died" %in% names(df) && !is.null(input$it3_zpk_died) && nzchar(input$it3_zpk_died)) {
+      df <- df |> dplyr::filter(as.character(died) == as.character(input$it3_zpk_died))
+    }
+    if ("cohort" %in% names(df) && !is.null(input$it3_zpk_cohort) && nzchar(input$it3_zpk_cohort)) {
+      df <- df |> dplyr::filter(as.character(cohort) == as.character(input$it3_zpk_cohort))
+    }
+    if ("vektmszsettingzpk" %in% names(df) && !is.null(input$it3_zpk_setting) && nzchar(input$it3_zpk_setting)) {
+      df <- df |> dplyr::filter(as.character(vektmszsettingzpk) == as.character(input$it3_zpk_setting))
+    }
+    if ("bin_size" %in% names(df) && !is.null(input$it3_zpk_bin) && nzchar(input$it3_zpk_bin)) {
+      df <- df |> dplyr::filter(as.character(bin_size) == as.character(input$it3_zpk_bin))
+    }
+    df
+  })
+
+  output$it3_plot_zpk <- renderPlotly({
+    df <- it3_zpk_filtered()
+    metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
+
+    req("t" %in% names(df), "zpk_category" %in% names(df), metric %in% names(df))
+    df <- df |>
+      dplyr::mutate(
+        t_num = numericize(t),
+        t_label = as.character(t),
+        zpk_category = as.character(zpk_category),
+        metric_value = numericize(.data[[metric]]),
+        pop_value = numericize(.data[["n_totaal_population"]] %||% NA_real_),
+        tooltip = paste0(
+          "t: ", t_label, "<br>",
+          "ZPK categorie: ", zpk_category, "<br>",
+          "Waarde: ", scales::comma(metric_value, big.mark = ",", decimal.mark = "."), "<br>",
+          "n_totaal_population: ", scales::comma(pop_value, big.mark = ",", decimal.mark = ".")
+        )
+      ) |>
+      dplyr::filter(!is.na(metric_value))
+
+    req(nrow(df) > 0)
+
+    title_parts <- c(
+      "Iteratie 3 | ZPK categorieën tellingen",
+      paste0("died: ", input$it3_zpk_died %||% "-"),
+      paste0("cohort: ", input$it3_zpk_cohort %||% "-"),
+      paste0("setting: ", input$it3_zpk_setting %||% "-"),
+      paste0("bin: ", input$it3_zpk_bin %||% "-"),
+      paste0("variabele: ", metric)
+    )
+
+    t_levels <- df |>
+      dplyr::distinct(t_label, t_num) |>
+      dplyr::arrange(t_num) |>
+      dplyr::pull(t_label)
+
+    p <- ggplot2::ggplot(
+      df,
+      ggplot2::aes(x = factor(t_label, levels = t_levels), y = metric_value, fill = zpk_category, text = tooltip)
+    ) +
+      ggplot2::geom_col(position = "stack") +
+      ggplot2::theme_minimal(base_size = 13) +
+      ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank()) +
+      ggplot2::labs(x = "t", y = NULL, fill = "ZPK categorie") +
+      ggplot2::ggtitle(paste(title_parts, collapse = " | "))
+
+    plotly::ggplotly(p, tooltip = "text") |>
+      plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
+  })
+
+  it3_top50_filtered <- reactive({
+    df <- it3_top50_raw
+    req(!is.null(df), nrow(df) > 0, "ranked_by" %in% names(df))
+    rb <- input$it3_top50_ranked_by
+    req(!is.null(rb), nzchar(rb))
+    df |> dplyr::filter(as.character(ranked_by) == as.character(rb))
+  })
+
+  it3_top50_compare_suffix <- reactive({
+    rb <- input$it3_top50_ranked_by %||% ""
+    group <- input$it3_top50_compare_group %||% "died"
+    if (identical(group, "died")) {
+      if (stringr::str_detect(rb, "_In_leven")) return("_Overleden")
+      if (stringr::str_detect(rb, "_Overleden")) return("_In_leven")
+      return(NA_character_)
+    }
+    # group == "bin size"
+    if (stringr::str_detect(rb, "_1000d")) return("_30d")
+    if (stringr::str_detect(rb, "_30d")) return("_1000d")
+    NA_character_
+  })
+
+  it3_top50_opposite_label <- reactive({
+    rb <- input$it3_top50_ranked_by %||% ""
+    group <- input$it3_top50_compare_group %||% "died"
+    if (identical(group, "died")) {
+      if (stringr::str_detect(rb, "_In_leven")) return("Overleden")
+      if (stringr::str_detect(rb, "_Overleden")) return("In leven")
+      return("onbekend")
+    }
+    if (stringr::str_detect(rb, "_1000d")) return("30d")
+    if (stringr::str_detect(rb, "_30d")) return("1000d")
+    "onbekend"
+  })
+
+  output$it3_top50_title <- renderText({
+    rb <- input$it3_top50_ranked_by %||% "-"
+    group <- input$it3_top50_compare_group %||% "-"
+    opposite <- it3_top50_opposite_label()
+    paste0("Top 50 ", rb, " compared to ", group, ": ", opposite)
+  })
+
+  it3_top50_plot_df <- function(df, metric_col, label_prefix = "", label_levels = NULL) {
+    req(metric_col %in% names(df))
+    lbl <- if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(df$mszzorgactiviteitomschrijving) else as.character(df$vektmszdeclaratiecode %||% "")
+    lbl_short <- stringr::str_trunc(lbl, 70)
+
+    out <- df |>
+      dplyr::mutate(
+        label_full = lbl,
+        label_short = lbl_short,
+        value_num = numericize(.data[[metric_col]]),
+        pop_value = numericize(.data[["n_totaal_population"]] %||% NA_real_),
+        tooltip = paste0(
+          label_prefix,
+          if (nzchar(label_prefix)) "<br>" else "",
+          "Activiteit: ", label_full, "<br>",
+          "Waarde: ", scales::comma(value_num, big.mark = ",", decimal.mark = "."), "<br>",
+          "n_totaal_population: ", scales::comma(pop_value, big.mark = ",", decimal.mark = ".")
+        )
+      )
+    out <- out |> dplyr::filter(!is.na(value_num))
+    out <- if ("ranking" %in% names(out)) dplyr::arrange(out, ranking) else dplyr::arrange(out, dplyr::desc(value_num))
+    out <- out |>
+      dplyr::mutate(
+        label_short = {
+          if (!is.null(label_levels) && length(label_levels) > 0) {
+            factor(label_short, levels = label_levels)
+          } else {
+            factor(label_short, levels = unique(label_short))
+          }
+        }
+      )
+
+    out
+  }
+
+  output$it3_plot_top50_main <- renderPlotly({
+    df <- it3_top50_filtered()
+    metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
+    df_lbl <- df |>
+      dplyr::mutate(lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70))
+    if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
+    label_levels <- df_lbl |> dplyr::pull(lbl) |> unique()
+    # Show rank 1 at top after coord_flip()
+    label_levels <- rev(label_levels)
+
+    df_plot <- it3_top50_plot_df(df, metric, label_prefix = "Geselecteerd (ranked_by)", label_levels = label_levels)
+    req(nrow(df_plot) > 0)
+
+    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = label_short, y = value_num, text = tooltip)) +
+      ggplot2::geom_col(fill = "#2563EB") +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(panel.grid.minor = ggplot2::element_blank()) +
+      ggplot2::labs(x = NULL, y = NULL)
+
+    plotly::ggplotly(p, tooltip = "text") |>
+      plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
+  })
+
+  output$it3_plot_top50_compare <- renderPlotly({
+    df <- it3_top50_filtered()
+    metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
+    suffix <- it3_top50_compare_suffix()
+    validate(need(!is.na(suffix) && nzchar(suffix), "Kan geen vergelijking bepalen uit ranked_by."))
+
+    compare_col <- paste0(metric, suffix)
+    validate(need(compare_col %in% names(df), paste0("Vergelijkingskolom ontbreekt: ", compare_col)))
+
+    df_lbl <- df |>
+      dplyr::mutate(lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70))
+    if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
+    label_levels <- df_lbl |> dplyr::pull(lbl) |> unique()
+    label_levels <- rev(label_levels)
+
+    df_plot <- it3_top50_plot_df(df, compare_col, label_prefix = paste0("Vergelijking: ", compare_col), label_levels = label_levels)
+    req(nrow(df_plot) > 0)
+
+    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = label_short, y = value_num, text = tooltip)) +
+      ggplot2::geom_col(fill = "#10B981") +
+      ggplot2::coord_flip() +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        panel.grid.minor = ggplot2::element_blank(),
+        axis.text.y = ggplot2::element_blank(),
+        axis.ticks.y = ggplot2::element_blank()
+      ) +
+      ggplot2::labs(x = NULL, y = NULL)
+
+    plotly::ggplotly(p, tooltip = "text") |>
+      plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
+  })
+
+  output$it3_dl_zpk <- downloadHandler(
+    filename = function() {
+      paste0("iteratie3_zpk_", input$it3_zpk_metric %||% "metric", "_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      writexl::write_xlsx(it3_zpk_filtered(), file)
+    }
+  )
+
+  output$it3_dl_top50 <- downloadHandler(
+    filename = function() {
+      paste0("iteratie3_top50_", input$it3_top50_metric %||% "metric", "_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      df <- it3_top50_filtered()
+      metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
+      suffix <- it3_top50_compare_suffix()
+      compare_col <- if (!is.na(suffix) && nzchar(suffix)) paste0(metric, suffix) else NA_character_
+      if (!is.na(compare_col) && compare_col %in% names(df)) {
+        df <- df |> dplyr::mutate(compare_value = .data[[compare_col]])
+      }
+      writexl::write_xlsx(df, file)
+    }
+  )
+
   # ==========================================
   # SERVER LOGIC: TAB 1 - Basispopulatie
   # ==========================================
