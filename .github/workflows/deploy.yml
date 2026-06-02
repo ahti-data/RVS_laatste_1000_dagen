@@ -16,8 +16,8 @@ jobs:
     - name: 📦 Prepare deploy folder
       run: |
         mkdir -p deploy
-        cp app.R deploy/
-        cp -r data deploy/
+        cp dashboard/app.R deploy/
+        cp -r dashboard/data deploy/
 
     - name: 📂 Sync files via SFTP
       uses: wlixcc/SFTP-Deploy-Action@v1.2.4
