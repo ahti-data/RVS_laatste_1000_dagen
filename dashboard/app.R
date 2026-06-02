@@ -16,7 +16,13 @@ packages <- c(
   "ggplot2",
   "purrr",
   "plotly",
-  "tibble"
+  "tibble",
+  "openxlsx",
+  "writexl",
+  "htmlwidgets",
+  "DT",
+  "stringr",
+  "scales"
 )
 
 # Identify packages that are not yet installed
@@ -41,6 +47,9 @@ flush.console()
 lapply(packages, library, character.only = TRUE)
 cat("[STARTUP] All packages loaded successfully.\n\n")
 flush.console()
+
+# Iteratie 2 dashboard helpers (adapted from app_temp.R)
+source("app_temp.R", local = FALSE)
 
 # ===== VARIABLE DECLARATIONS & UTILITIES =====
 
@@ -197,182 +206,184 @@ get_all_interventie_names <- function() {
 
 # ===== UI DEFINITION =====
 ui <- navbarPage(
-  title = "Laatste 1000 dagen: Iteratie 1",
+  title = "Laatste 1000 dagen",
   id = "main_nav",
-  
-  # --- TAB 1: Basispopulatie ---
-  tabPanel("Basispopulatie",
-           sidebarLayout(
-             sidebarPanel(
-               h4("Filters"),
-               selectInput("pop_jaar", "Jarenselectie:", choices = c("2019", "2023", "2019 + 2023"), selected = "2019 + 2023"),
-               selectInput("pop_split", "Kies populaties:", choices = c("Enkel totale populatie", "Totaal + subgroepen doodsoorzaak"), selected = "Totaal + subgroepen doodsoorzaak"),
-               hr(),
-               downloadButton("dl_basis", "Download Data voor Think-cell")
-             ),
-             mainPanel(
-               plotlyOutput("plot_basispopulatie", height = "600px")
+
+  navbarMenu(
+    "Iteratie 1",
+    tabPanel("Basispopulatie",
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Filters"),
+                 selectInput("pop_jaar", "Jarenselectie:", choices = c("2019", "2023", "2019 + 2023"), selected = "2019 + 2023"),
+                 selectInput("pop_split", "Kies populaties:", choices = c("Enkel totale populatie", "Totaal + subgroepen doodsoorzaak"), selected = "Totaal + subgroepen doodsoorzaak"),
+                 hr(),
+                 downloadButton("dl_basis", "Download Data voor Think-cell")
+               ),
+               mainPanel(
+                 plotlyOutput("plot_basispopulatie", height = "600px")
+               )
              )
-           )
-  ),
-  
-  # --- TAB 2: Zorg Totaal ---
-  tabPanel("Zorg Totaal",
-           sidebarLayout(
-             sidebarPanel(
-               h4("Filters"),
-               selectInput("tot_pop", "Populatie:", choices = doodsoorzaken, selected = "all"),
-               selectInput("tot_bin_size", "Bin size:",
-                           choices = c("monthly", "1000days"),
-                           selected = "1000days"),
-               selectInput("tot_jaar", "Jaar:", choices = c("2019", "2023", "Beide"), selected = "2023"),
-               selectInput("tot_maatstaf", "Maatstaf:",
-                           choices = c("Totale kosten" = "sum_totaal_groep",
-                                       "Kosten per persoon" = "gemiddelde_per_persoon",
-                                       "Aantal gebruikers" = "n_totaal_gebruikers",
-                                       "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
-                                       "Prevalentie per 100" = "prevalentie_per_100"),
-                           selected = "gemiddelde_per_persoon"),
-               selectizeInput("tot_variables", "Zorgvariabelen:",
-                              choices = NULL,
-                              selected = NULL,
-                              multiple = TRUE,
-                              options = list(placeholder = "Alle (behalve interventies)")),
-               selectInput("tot_vgl", "Kies vergelijking:",
-                           choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"), 
-                           selected = "Overleden vs. In leven (Controle)"),
-               hr(),
-               downloadButton("dl_totaal", "Download Data voor Think-cell")
-             ),
-             mainPanel(
-               plotlyOutput("plot_zorg_totaal", height = "600px")
+    ),
+
+    tabPanel("Zorg Totaal",
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Filters"),
+                 selectInput("tot_pop", "Populatie:", choices = doodsoorzaken, selected = "all"),
+                 selectInput("tot_bin_size", "Bin size:",
+                             choices = c("monthly", "1000days"),
+                             selected = "1000days"),
+                 selectInput("tot_jaar", "Jaar:", choices = c("2019", "2023", "Beide"), selected = "2023"),
+                 selectInput("tot_maatstaf", "Maatstaf:",
+                             choices = c("Totale kosten" = "sum_totaal_groep",
+                                         "Kosten per persoon" = "gemiddelde_per_persoon",
+                                         "Aantal gebruikers" = "n_totaal_gebruikers",
+                                         "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
+                                         "Prevalentie per 100" = "prevalentie_per_100"),
+                             selected = "gemiddelde_per_persoon"),
+                 selectizeInput("tot_variables", "Zorgvariabelen:",
+                                choices = NULL,
+                                selected = NULL,
+                                multiple = TRUE,
+                                options = list(placeholder = "Alle (behalve interventies)")),
+                 selectInput("tot_vgl", "Kies vergelijking:",
+                             choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"),
+                             selected = "Overleden vs. In leven (Controle)"),
+                 hr(),
+                 downloadButton("dl_totaal", "Download Data voor Think-cell")
+               ),
+               mainPanel(
+                 plotlyOutput("plot_zorg_totaal", height = "600px")
+               )
              )
-           )
-  ),
-  
-  # --- TAB 3: Zorg over Tijd ---
-  tabPanel("Zorg over Tijd",
-           sidebarLayout(
-             sidebarPanel(
-               h4("Filters"),
-               selectizeInput("mnd_domein", "Zorgdomein (Variabele):", choices = base_names, selected = base_names[1], multiple = TRUE),
-               helpText("Meerdere selectie toont een stacked barchart in staafgrafiekmodus."),
-               selectInput("mnd_bin_size", "Bin size:",
-                           choices = c("monthly", "1000days"),
-                           selected = "monthly"),
-               selectInput("mnd_maatstaf", "Maatstaf:",
-                           choices = c("Totale kosten" = "sum_totaal_groep",
-                                       "Kosten per persoon" = "gemiddelde_per_persoon",
-                                       "Aantal gebruikers" = "n_totaal_gebruikers",
-                                       "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
-                                       "Prevalentie per 100" = "prevalentie_per_100"),
-                           selected = "gemiddelde_per_persoon"),
-               selectInput("mnd_jaar", "Jaar:", choices = c("2019", "2023", "Beide"), selected = "2023"),
-               selectInput("mnd_pop", "Populatie (Doodsoorzaak):", choices = doodsoorzaken, selected = "all"),
-               selectInput("mnd_vgl", "Kies status:", 
-                           choices = c("Alleen overleden" = "Overleden",
-                                       "Alleen in leven" = "In leven"), 
-                           selected = "Overleden"),
-               selectInput("mnd_grafiek", "Grafiektype:",
-                           choices = c("Staafgrafiek", "Lijngrafiek"),
-                           selected = "Staafgrafiek"),
-               selectInput("mnd_lijnmodus", "Lijngrafiek modus:",
-                           choices = c("Status (met/zonder controle)" = "status",
-                                       "Alle doodsoorzaken in 1 grafiek" = "doodsoorzaak",
-                                       "Totale populatie 2019 vs 2023" = "cohort"),
-                           selected = "status"),
-               selectizeInput("mnd_zichtbare_lijnen", "Zichtbare lijnen:",
-                              choices = NULL, selected = NULL, multiple = TRUE),
-               helpText("Tip: in lijngrafiekmodus kun je lijnen aan/uit zetten via 'Zichtbare lijnen'"),
-               hr(),
-               downloadButton("dl_maandelijks", "Download Data voor Think-cell")
-             ),
-             mainPanel(
-               plotlyOutput("plot_zorg_maandelijks", height = "600px")
+    ),
+
+    tabPanel("Zorg over Tijd",
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Filters"),
+                 selectizeInput("mnd_domein", "Zorgdomein (Variabele):", choices = base_names, selected = base_names[1], multiple = TRUE),
+                 helpText("Meerdere selectie toont een stacked barchart in staafgrafiekmodus."),
+                 selectInput("mnd_bin_size", "Bin size:",
+                             choices = c("monthly", "1000days"),
+                             selected = "monthly"),
+                 selectInput("mnd_maatstaf", "Maatstaf:",
+                             choices = c("Totale kosten" = "sum_totaal_groep",
+                                         "Kosten per persoon" = "gemiddelde_per_persoon",
+                                         "Aantal gebruikers" = "n_totaal_gebruikers",
+                                         "Kosten per gebruiker" = "gemiddelde_per_gebruiker",
+                                         "Prevalentie per 100" = "prevalentie_per_100"),
+                             selected = "gemiddelde_per_persoon"),
+                 selectInput("mnd_jaar", "Jaar:", choices = c("2019", "2023", "Beide"), selected = "2023"),
+                 selectInput("mnd_pop", "Populatie (Doodsoorzaak):", choices = doodsoorzaken, selected = "all"),
+                 selectInput("mnd_vgl", "Kies status:",
+                             choices = c("Alleen overleden" = "Overleden",
+                                         "Alleen in leven" = "In leven"),
+                             selected = "Overleden"),
+                 selectInput("mnd_grafiek", "Grafiektype:",
+                             choices = c("Staafgrafiek", "Lijngrafiek"),
+                             selected = "Staafgrafiek"),
+                 selectInput("mnd_lijnmodus", "Lijngrafiek modus:",
+                             choices = c("Status (met/zonder controle)" = "status",
+                                         "Alle doodsoorzaken in 1 grafiek" = "doodsoorzaak",
+                                         "Totale populatie 2019 vs 2023" = "cohort"),
+                             selected = "status"),
+                 selectizeInput("mnd_zichtbare_lijnen", "Zichtbare lijnen:",
+                                choices = NULL, selected = NULL, multiple = TRUE),
+                 helpText("Tip: in lijngrafiekmodus kun je lijnen aan/uit zetten via 'Zichtbare lijnen'"),
+                 hr(),
+                 downloadButton("dl_maandelijks", "Download Data voor Think-cell")
+               ),
+               mainPanel(
+                 plotlyOutput("plot_zorg_maandelijks", height = "600px")
+               )
              )
-           )
-  ),
-  
-  # --- TAB 4: Costs Boxplot-like (Quantiles) ---
-  tabPanel("Kosten Boxplot",
-           sidebarLayout(
-             sidebarPanel(
-               h4("Filters"),
-               selectInput("cost_var", "Kies variabele (name):", choices = base_names, selected = base_names[1]),
-               selectInput("cost_bin_size", "Bin size:",
-                           choices = c("monthly", "1000days"),
-                           selected = "monthly"),
-               selectInput("cost_pop", "Populatie (Doodsoorzaak):",
-                           choices = doodsoorzaken,
-                           selected = "all"),
-               helpText("Boxplot-achtig overzicht op basis van quantielen per cohort en status.")
-             ),
-             mainPanel(
-               plotlyOutput("plot_cost", height = "600px")
+    ),
+
+    tabPanel("Kosten Boxplot",
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Filters"),
+                 selectInput("cost_var", "Kies variabele (name):", choices = base_names, selected = base_names[1]),
+                 selectInput("cost_bin_size", "Bin size:",
+                             choices = c("monthly", "1000days"),
+                             selected = "monthly"),
+                 selectInput("cost_pop", "Populatie (Doodsoorzaak):",
+                             choices = doodsoorzaken,
+                             selected = "all"),
+                 helpText("Boxplot-achtig overzicht op basis van quantielen per cohort en status.")
+               ),
+               mainPanel(
+                 plotlyOutput("plot_cost", height = "600px")
+               )
              )
-           )
-  ),
-  
-  # --- TAB 5: Zorg per Domein Butterfly ---
-  tabPanel("Zorg per Domein (Butterfly)",
-           sidebarLayout(
-             sidebarPanel(
-               h4("Filters"),
-               selectInput("butterfly_domein", "Zorgdomein:", choices = base_names, selected = base_names[1]),
-               selectInput("butterfly_maatstaf", "Maatstaf:",
-                           choices = c("Aantal gebruikers" = "n_totaal_gebruikers",
-                                       "Kosten per gebruiker" = "gemiddelde_per_persoon",
-                                       "Totale kosten" = "sum_totaal_groep",
-                                       "Kosten per gebruiker (alt)" = "gemiddelde_per_gebruiker",
-                                       "Prevalentie per 100" = "prevalentie_per_100"),
-                           selected = "gemiddelde_per_persoon"),
-               selectInput("butterfly_vgl", "Vergelijking (Links vs Rechts):",
-                           choices = c("Geobserveerd 2023 vs. Controle 2023" = "obs_2023_vs_ctrl_2023",
-                                       "Geobserveerd 2019 vs. Geobserveerd 2023" = "obs_2019_vs_obs_2023",
-                                       "Geobserveerd 2019 vs. Controle 2019" = "obs_2019_vs_ctrl_2019"),
-                           selected = "obs_2023_vs_ctrl_2023"),
-               hr(),
-               downloadButton("dl_butterfly", "Download Data voor Think-cell")
-             ),
-             mainPanel(
-               plotlyOutput("plot_butterfly", height = "700px")
+    ),
+
+    tabPanel("Zorg per Domein (Butterfly)",
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Filters"),
+                 selectInput("butterfly_domein", "Zorgdomein:", choices = base_names, selected = base_names[1]),
+                 selectInput("butterfly_maatstaf", "Maatstaf:",
+                             choices = c("Aantal gebruikers" = "n_totaal_gebruikers",
+                                         "Kosten per gebruiker" = "gemiddelde_per_persoon",
+                                         "Totale kosten" = "sum_totaal_groep",
+                                         "Kosten per gebruiker (alt)" = "gemiddelde_per_gebruiker",
+                                         "Prevalentie per 100" = "prevalentie_per_100"),
+                             selected = "gemiddelde_per_persoon"),
+                 selectInput("butterfly_vgl", "Vergelijking (Links vs Rechts):",
+                             choices = c("Geobserveerd 2023 vs. Controle 2023" = "obs_2023_vs_ctrl_2023",
+                                         "Geobserveerd 2019 vs. Geobserveerd 2023" = "obs_2019_vs_obs_2023",
+                                         "Geobserveerd 2019 vs. Controle 2019" = "obs_2019_vs_ctrl_2019"),
+                             selected = "obs_2023_vs_ctrl_2023"),
+                 hr(),
+                 downloadButton("dl_butterfly", "Download Data voor Think-cell")
+               ),
+               mainPanel(
+                 plotlyOutput("plot_butterfly", height = "700px")
+               )
              )
-           )
+    ),
+
+    tabPanel("Interventies",
+             sidebarLayout(
+               sidebarPanel(
+                 h4("Filters"),
+                 selectizeInput("int_interventie", "Selecteer interventie variabele(s):",
+                                choices = get_all_interventie_names(),
+                                selected = get_all_interventie_names()[1],
+                                multiple = TRUE),
+                 selectInput("int_maatstaf", "Maatstaf:",
+                             choices = get_maatstaf_options(),
+                             selected = "gemiddelde_per_persoon"),
+                 selectInput("int_bin_size", "Bin size:",
+                             choices = c("monthly", "1000days"),
+                             selected = "1000days"),
+                 selectInput("int_jaar", "Jaar:",
+                             choices = c("2019", "2023", "Beide"),
+                             selected = "2023"),
+                 selectInput("int_vgl", "Vergelijking:",
+                             choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"),
+                             selected = "Overleden vs. In leven (Controle)"),
+                 hr(),
+                 downloadButton("dl_interventies", "Download Data voor Think-cell")
+               ),
+               mainPanel(
+                 plotlyOutput("plot_interventies", height = "600px")
+               )
+             )
+    ),
+
+    tabPanel("Systeem Logs",
+             verbatimTextOutput("app_log")
+    )
   ),
 
-  # --- TAB 6: Interventies Analysis ---
-  tabPanel("Interventies",
-           sidebarLayout(
-             sidebarPanel(
-               h4("Filters"),
-               selectizeInput("int_interventie", "Selecteer interventie variabele(s):",
-                              choices = get_all_interventie_names(),
-                              selected = get_all_interventie_names()[1],
-                              multiple = TRUE),
-               selectInput("int_maatstaf", "Maatstaf:",
-                           choices = get_maatstaf_options(),
-                           selected = "gemiddelde_per_persoon"),
-               selectInput("int_bin_size", "Bin size:",
-                           choices = c("monthly", "1000days"),
-                           selected = "1000days"),
-               selectInput("int_jaar", "Jaar:",
-                           choices = c("2019", "2023", "Beide"),
-                           selected = "2023"),
-               selectInput("int_vgl", "Vergelijking:",
-                           choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"),
-                           selected = "Overleden vs. In leven (Controle)"),
-               hr(),
-               downloadButton("dl_interventies", "Download Data voor Think-cell")
-             ),
-             mainPanel(
-               plotlyOutput("plot_interventies", height = "600px")
-             )
-           )
-  ),
-
-  # --- TAB 7: App Logs ---
-  tabPanel("Systeem Logs",
-           verbatimTextOutput("app_log")
+  navbarMenu(
+    "Iteratie 2",
+    iteration2_header(),
+    iteration2_panels()
   )
 )
 
@@ -1219,6 +1230,16 @@ server <- function(input, output, session) {
     if (length(errors) > 0) paste("=== ERROR LOG ===\n", paste(errors, collapse = "\n"))
     else "=== NO ERRORS ===\nApp is running normally."
   })
+
+  # ==========================================
+  # SERVER LOGIC: ITERATIE 2 (from app_temp.R)
+  # ==========================================
+  iteration2_server(
+    input,
+    output,
+    session,
+    data_path_override = "data/data_iteration_2/output.xlsx"
+  )
 }
 
 # Run the app (Using your existing wrapper)
