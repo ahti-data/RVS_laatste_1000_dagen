@@ -795,11 +795,63 @@ read_iteration3_xlsx <- function(path) {
   df
 }
 
+read_iteration3_regression <- function(path) {
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) return(tibble::tibble())
+
+  df <- readxl::read_excel(path, .name_repair = "unique")
+  df <- dplyr::as_tibble(df)
+
+  col_variable <- first_existing(names(df), c("variable", "Variable", "term", "coefficient"))
+  col_estimate <- first_existing(names(df), c("Estimate", "estimate", "coef", "coefficient_estimate"))
+  col_se <- {
+    hit <- names(df)[grepl("^std", names(df), ignore.case = TRUE) & grepl("error", names(df), ignore.case = TRUE)]
+    if (length(hit) > 0) hit[[1]] else first_existing(names(df), c("Std. Error", "std_error", "Std..Error", "se"))
+  }
+  col_dependent <- first_existing(names(df), c("dependent_var", "Dependent_var", "dependent_variable"))
+  col_p <- {
+    hit <- names(df)[grepl("pr", names(df), ignore.case = TRUE)]
+    if (length(hit) > 0) hit[[1]] else NA_character_
+  }
+  col_n <- first_existing(names(df), c("n_obs", "n", "N"))
+
+  required <- c(col_variable, col_estimate, col_se, col_dependent)
+  if (any(is.na(required))) {
+    warning(
+      "regression_results.xlsx: ontbrekende kolommen. Gevonden: ",
+      paste(names(df), collapse = ", ")
+    )
+    return(tibble::tibble())
+  }
+
+  out <- df |>
+    dplyr::transmute(
+      coefficient = as.character(.data[[col_variable]]),
+      estimate = numericize(.data[[col_estimate]]),
+      std_error = numericize(.data[[col_se]]),
+      dependent_var = as.character(.data[[col_dependent]]),
+      p_value = if (!is.na(col_p)) numericize(.data[[col_p]]) else NA_real_,
+      n_obs = if (!is.na(col_n)) numericize(.data[[col_n]]) else NA_real_
+    ) |>
+    dplyr::filter(
+      !is.na(coefficient), nzchar(coefficient),
+      !is.na(dependent_var), nzchar(dependent_var),
+      !is.na(estimate), !is.na(std_error)
+    ) |>
+    dplyr::mutate(
+      ci_lower = estimate - 1.96 * std_error,
+      ci_upper = estimate + 1.96 * std_error
+    )
+
+  out
+}
+
 data_path_iteration3_zpk <- resolve_iteration3_file("*zpk_categorieen_tellingen*.xlsx")
 data_path_iteration3_top50 <- resolve_iteration3_file("*top50_activiteiten*.xlsx")
+data_path_iteration3_regression <- resolve_iteration3_file("*regression_results*.xlsx")
 
 it3_zpk_raw <- read_iteration3_xlsx(data_path_iteration3_zpk)
 it3_top50_raw <- read_iteration3_xlsx(data_path_iteration3_top50)
+it3_regression_raw <- read_iteration3_regression(data_path_iteration3_regression)
 
 
 # ===== VARIABLE DECLARATIONS & UTILITIES =====
@@ -1216,6 +1268,23 @@ ui <- navbarPage(
             downloadButton("it3_dl_top50", "Gegevens downloaden")
           )
         )
+      ),
+      tabPanel(
+        "Regressie resultaten",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_reg_dependent_var", "Afhankelijke variabele (dependent_var)", choices = NULL),
+            helpText("Coëfficiënten met 95%-betrouwbaarheidsinterval (schatting ± 1,96 × standaardfout).")
+          ),
+          mainPanel(
+            width = 9,
+            h4(textOutput("it3_reg_title")),
+            uiOutput("it3_reg_plot_ui"),
+            br(),
+            downloadButton("it3_dl_regression", "Gegevens downloaden")
+          )
+        )
       )
     )
   )
@@ -1270,6 +1339,12 @@ server <- function(input, output, session) {
     if (!is.null(it3_top50_raw) && nrow(it3_top50_raw) > 0 && "ranked_by" %in% names(it3_top50_raw)) {
       ranked_vals <- ordered_values(it3_top50_raw$ranked_by)
       updateSelectInput(session, "it3_top50_ranked_by", choices = ranked_vals, selected = ranked_vals[[1]])
+    }
+
+    # Regressie resultaten
+    if (!is.null(it3_regression_raw) && nrow(it3_regression_raw) > 0) {
+      dep_vals <- sort(unique(as.character(it3_regression_raw$dependent_var)))
+      updateSelectInput(session, "it3_reg_dependent_var", choices = dep_vals, selected = dep_vals[[1]])
     }
   })
 
@@ -1519,6 +1594,95 @@ server <- function(input, output, session) {
         df <- df |> dplyr::mutate(compare_value = .data[[compare_col]])
       }
       writexl::write_xlsx(df, file)
+    }
+  )
+
+  it3_regression_filtered <- reactive({
+    df <- it3_regression_raw
+    req(!is.null(df), nrow(df) > 0)
+    dep <- input$it3_reg_dependent_var
+    req(!is.null(dep), nzchar(dep))
+    df |> dplyr::filter(as.character(dependent_var) == as.character(dep))
+  })
+
+  output$it3_reg_title <- renderText({
+    dep <- input$it3_reg_dependent_var %||% "-"
+    paste0("Regressiecoëfficiënten voor ", dep)
+  })
+
+  output$it3_reg_plot_ui <- renderUI({
+    df <- it3_regression_filtered()
+    n <- if (!is.null(df)) nrow(df) else 0
+    plot_height <- max(580, min(2800, n * 28 + 160))
+    plotlyOutput("it3_plot_regression", height = paste0(plot_height, "px"))
+  })
+
+  output$it3_plot_regression <- renderPlotly({
+    df <- it3_regression_filtered()
+    req(nrow(df) > 0)
+
+    df_plot <- df |>
+      dplyr::mutate(
+        coef_label = stringr::str_wrap(coefficient, width = 42),
+        tooltip = paste0(
+          "Coëfficiënt: ", coefficient, "<br>",
+          "Schatting: ", scales::number(estimate, accuracy = 0.0001), "<br>",
+          "Standaardfout: ", scales::number(std_error, accuracy = 0.0001), "<br>",
+          "95% CI: [", scales::number(ci_lower, accuracy = 0.0001), ", ",
+          scales::number(ci_upper, accuracy = 0.0001), "]",
+          if (!is.na(p_value[1])) paste0("<br>p-waarde: ", scales::number(p_value, accuracy = 0.0001)) else "",
+          if (!is.na(n_obs[1])) paste0("<br>n_obs: ", scales::comma(n_obs[1], big.mark = ",")) else ""
+        )
+      ) |>
+      dplyr::arrange(coefficient) |>
+      dplyr::mutate(coef_label = factor(coef_label, levels = rev(unique(coef_label))))
+
+    p <- ggplot2::ggplot(
+      df_plot,
+      ggplot2::aes(
+        x = estimate,
+        y = coef_label,
+        text = tooltip
+      )
+    ) +
+      ggplot2::geom_vline(xintercept = 0, color = "#9CA3AF", linewidth = 0.35, linetype = "dashed") +
+      ggplot2::geom_errorbarh(
+        ggplot2::aes(xmin = ci_lower, xmax = ci_upper),
+        height = 0.22,
+        linewidth = 0.55,
+        color = "#4B5563"
+      ) +
+      ggplot2::geom_point(size = 2.4, color = "#2563EB") +
+      ggplot2::theme_minimal(base_size = 12) +
+      ggplot2::theme(
+        panel.grid.minor = ggplot2::element_blank(),
+        axis.text.y = ggplot2::element_text(size = 9)
+      ) +
+      ggplot2::labs(
+        x = "Schatting (95% betrouwbaarheidsinterval)",
+        y = NULL
+      )
+
+    plotly::ggplotly(p, tooltip = "text") |>
+      plotly::layout(
+        margin = list(l = 220),
+        hovermode = "closest"
+      ) |>
+      plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
+  })
+
+  output$it3_dl_regression <- downloadHandler(
+    filename = function() {
+      paste0(
+        "iteratie3_regressie_",
+        sanitize_filename(input$it3_reg_dependent_var %||% "dependent_var"),
+        "_",
+        Sys.Date(),
+        ".xlsx"
+      )
+    },
+    content = function(file) {
+      writexl::write_xlsx(it3_regression_filtered(), file)
     }
   )
 
