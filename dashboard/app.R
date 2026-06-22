@@ -140,6 +140,25 @@ pretty_vektmszsettingzpk <- function(x) {
   )
 }
 
+normalize_it3_filter_value <- function(x) {
+  val <- stringr::str_trim(as.character(x))
+  val[val == "" | val == "NA"] <- NA_character_
+  sub("\\.0+$", "", val)
+}
+
+it3_zpk_prestatie_colname <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(NA_character_)
+  first_existing(names(df), c("prestatie_type", "Prestatie_type", "prestatietype", "PrestatieType"))
+}
+
+filter_it3_zpk_eq <- function(df, col, selected) {
+  if (!col %in% names(df)) return(df)
+  sel <- normalize_it3_filter_value(selected)
+  if (length(sel) != 1 || is.na(sel)) return(df)
+  df |>
+    dplyr::filter(normalize_it3_filter_value(.data[[col]]) == sel)
+}
+
 format_code_value <- function(value, metric_name) {
   if (metric_name %in% c("gebruikers_per_persoon", "declaraties_per_persoon")) {
     scales::number(value, big.mark = ",", decimal.mark = ".", accuracy = 0.0001)
@@ -799,6 +818,10 @@ read_iteration3_xlsx <- function(path) {
   )
   for (col in num_cols) df[[col]] <- numericize(df[[col]])
 
+  for (col in intersect(c("prestatie_type", "died", "cohort", "bin_size", "zpk_category"), names(df))) {
+    df[[col]] <- as.character(df[[col]])
+  }
+
   df
 }
 
@@ -961,6 +984,12 @@ read_iteration3_cost_agg <- function(path) {
   filter_iteration3_cost_agg_totals(df)
 }
 
+format_regression_dependent_var <- function(x) {
+  x <- as.character(x)
+  needs_suffix <- grepl("1000d$", x) | grepl("30d$", x)
+  ifelse(needs_suffix, paste0(x, "_per_persoon"), x)
+}
+
 read_iteration3_regression <- function(path) {
   if (is.na(path) || !nzchar(path) || !file.exists(path)) return(tibble::tibble())
 
@@ -999,7 +1028,7 @@ read_iteration3_regression <- function(path) {
       coefficient = as.character(.data[[col_variable]]),
       estimate = numericize(.data[[col_estimate]]),
       std_error = numericize(.data[[col_se]]),
-      dependent_var = as.character(.data[[col_dependent]]),
+      dependent_var = format_regression_dependent_var(.data[[col_dependent]]),
       p_value = if (!is.na(col_p)) numericize(.data[[col_p]]) else NA_real_,
       n_obs = if (!is.na(col_n)) numericize(.data[[col_n]]) else NA_real_,
       used_cohorts = if (!is.na(col_used_cohorts)) as.character(.data[[col_used_cohorts]]) else NA_character_
@@ -1024,11 +1053,6 @@ data_path_iteration3_regression <- resolve_iteration3_file("*regression_results.
 
 it3_cost_agg_raw <- read_iteration3_cost_agg(data_path_iteration3_cost_agg)
 it3_zpk_raw <- read_iteration3_xlsx(data_path_iteration3_zpk)
-it3_zpk_prestatie_col <- if (!is.null(it3_zpk_raw) && nrow(it3_zpk_raw) > 0) {
-  first_existing(names(it3_zpk_raw), c("prestatie_type", "Prestatie_type", "prestatietype"))
-} else {
-  NA_character_
-}
 it3_top50_raw <- read_iteration3_xlsx(data_path_iteration3_top50)
 it3_regression_raw <- read_iteration3_regression(data_path_iteration3_regression)
 
@@ -1562,7 +1586,25 @@ server <- function(input, output, session) {
       }
       if ("bin_size" %in% names(it3_zpk_raw)) {
         bin_vals <- ordered_values(it3_zpk_raw$bin_size)
-        updateSelectInput(session, "it3_zpk_bin", choices = bin_vals, selected = bin_vals[[1]])
+        updateSelectInput(
+          session,
+          "it3_zpk_bin",
+          choices = bin_vals,
+          selected = if ("monthly" %in% bin_vals) "monthly" else bin_vals[[1]]
+        )
+      }
+      prest_col <- it3_zpk_prestatie_colname(it3_zpk_raw)
+      if (!is.na(prest_col)) {
+        prest_vals <- sort(unique(normalize_it3_filter_value(it3_zpk_raw[[prest_col]])))
+        prest_vals <- prest_vals[!is.na(prest_vals)]
+        if (length(prest_vals) > 0) {
+          updateRadioButtons(
+            session,
+            "it3_zpk_prestatie_type",
+            choices = prest_vals,
+            selected = if ("DBC" %in% prest_vals) "DBC" else prest_vals[[1]]
+          )
+        }
       }
     }
 
@@ -1681,23 +1723,16 @@ server <- function(input, output, session) {
     df <- it3_zpk_raw
     req(!is.null(df), nrow(df) > 0)
 
-    if ("died" %in% names(df) && !is.null(input$it3_zpk_died) && nzchar(input$it3_zpk_died)) {
-      df <- df |> dplyr::filter(as.character(died) == as.character(input$it3_zpk_died))
+    df <- filter_it3_zpk_eq(df, "died", input$it3_zpk_died)
+    df <- filter_it3_zpk_eq(df, "cohort", input$it3_zpk_cohort)
+    df <- filter_it3_zpk_eq(df, "vektmszsettingzpk", input$it3_zpk_setting)
+    df <- filter_it3_zpk_eq(df, "bin_size", input$it3_zpk_bin)
+
+    prest_col <- it3_zpk_prestatie_colname(df)
+    if (!is.na(prest_col)) {
+      df <- filter_it3_zpk_eq(df, prest_col, input$it3_zpk_prestatie_type)
     }
-    if ("cohort" %in% names(df) && !is.null(input$it3_zpk_cohort) && nzchar(input$it3_zpk_cohort)) {
-      df <- df |> dplyr::filter(as.character(cohort) == as.character(input$it3_zpk_cohort))
-    }
-    if ("vektmszsettingzpk" %in% names(df) && !is.null(input$it3_zpk_setting) && nzchar(input$it3_zpk_setting)) {
-      df <- df |> dplyr::filter(as.character(vektmszsettingzpk) == as.character(input$it3_zpk_setting))
-    }
-    if ("bin_size" %in% names(df) && !is.null(input$it3_zpk_bin) && nzchar(input$it3_zpk_bin)) {
-      df <- df |> dplyr::filter(as.character(bin_size) == as.character(input$it3_zpk_bin))
-    }
-    if (!is.na(it3_zpk_prestatie_col) && it3_zpk_prestatie_col %in% names(df)) {
-      sel <- input$it3_zpk_prestatie_type
-      req(!is.null(sel), nzchar(sel))
-      df <- df |> dplyr::filter(as.character(.data[[it3_zpk_prestatie_col]]) == as.character(sel))
-    }
+
     df
   })
 
