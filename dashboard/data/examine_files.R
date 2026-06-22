@@ -1,0 +1,28 @@
+setwd('c:\\Users\\MarcoGriepAHTI\\Git Repos\\RVS_laatste_1000_dagen\\dashboard\\data\\data_iteration_3')
+library(readxl)
+library(dplyr)
+
+cat('\n===== COST_AGGREGATIONS.XLSX =====\n')
+cost_agg <- read_excel('cost_aggregations.xlsx')
+cat('Columns:', paste(names(cost_agg), collapse=', '), '\n')
+cat('Dimensions:', nrow(cost_agg), 'rows x', ncol(cost_agg), 'cols\n')
+cat('\nFirst 2 rows:\n')
+print(as.data.frame(head(cost_agg, 2)), width=Inf)
+cat('\nUnique type values:', paste(unique(cost_agg$type), collapse=', '), '\n')
+if('wlz_start_period' %in% names(cost_agg)) cat('Unique wlz_start_period:', paste(unique(cost_agg$wlz_start_period), collapse=', '), '\n')
+if('provincie' %in% names(cost_agg)) cat('Unique provincie:', paste(unique(cost_agg$provincie), collapse=', '), '\n')
+if('used_any_acp_2years' %in% names(cost_agg)) cat('Unique used_any_acp_2years:', paste(unique(cost_agg$used_any_acp_2years), collapse=', '), '\n')
+
+cat('\n===== REGRESSION_RESULTS.XLSX =====\n')
+reg_res <- read_excel('regression_results.xlsx')
+cat('Columns:', paste(names(reg_res), collapse=', '), '\n')
+cat('Dimensions:', nrow(reg_res), 'rows x', ncol(reg_res), 'cols\n')
+if('used_cohorts' %in% names(reg_res)) cat('used_cohorts PRESENT. Unique values:', paste(unique(reg_res$used_cohorts), collapse=', '), '\n')
+
+cat('\n===== TOP50_ACTIVITEITEN.XLSX =====\n')
+top50 <- read_excel('top50_activiteiten.xlsx')
+cat('Columns:', paste(names(top50), collapse=', '), '\n')
+
+cat('\n===== ZPK_CATEGORIEEN_TELLINGEN.XLSX =====\n')
+zpk <- read_excel('zpk_categorieen_tellingen.xlsx')
+cat('Columns:', paste(names(zpk), collapse=', '), '\n')

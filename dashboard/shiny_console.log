@@ -1,6 +1,9 @@
-[2026-06-03 08:59:43.940522] [startup] Initializing data...
-[2026-06-03 08:59:50.160784] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-03 08:59:50.222517] [startup] Initialization complete: 42 base names, 9 doodsoorzaken
-[2026-06-03 08:59:55.441323] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-03 08:59:55.830872] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
-[2026-06-03 08:59:55.841645] [data_maandelijks_lijn] Post-filter: 33 rows
+[2026-06-22 09:31:47.614953] [startup] Initializing data...
+[2026-06-22 09:31:51.216272] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-22 09:31:51.336095] [startup] Initialization complete: 42 base names, 9 doodsoorzaken
+[2026-06-22 09:31:57.946128] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-22 09:31:58.813558] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
+[2026-06-22 09:31:58.863913] [data_maandelijks_lijn] Post-filter: 33 rows
+[2026-06-22 09:32:12.366563] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-22 09:32:13.730698] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
+[2026-06-22 09:32:13.825804] [data_maandelijks_lijn] Post-filter: 33 rows
