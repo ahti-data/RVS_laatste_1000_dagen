@@ -129,6 +129,17 @@ pretty_code_metric <- function(x) {
   )
 }
 
+pretty_vektmszsettingzpk <- function(x) {
+  dplyr::recode(
+    as.character(x),
+    "1" = "Poliklinisch",
+    "2" = "Dagbehandeling",
+    "3" = "Klinisch",
+    "9" = "missing",
+    .default = as.character(x)
+  )
+}
+
 format_code_value <- function(value, metric_name) {
   if (metric_name %in% c("gebruikers_per_persoon", "declaraties_per_persoon")) {
     scales::number(value, big.mark = ",", decimal.mark = ".", accuracy = 0.0001)
@@ -810,6 +821,97 @@ filter_iteration3_cost_agg_totals <- function(df) {
   df
 }
 
+it3_cost_agg_join_cols <- function(df) {
+  setdiff(names(df), c("type", "value", "variable", "sheet"))
+}
+
+it3_cost_agg_format_value <- function(x, metric) {
+  if (metric %in% c("kosten_per_persoon", "kosten_per_gebruiker")) {
+    scales::number(x, big.mark = ",", decimal.mark = ".", accuracy = 0.01)
+  } else {
+    scales::comma(x, big.mark = ",", decimal.mark = ".")
+  }
+}
+
+it3_cost_agg_allows_derived_metrics <- function(sheet) {
+  if (is.null(sheet) || !nzchar(as.character(sheet))) return(FALSE)
+  !grepl("diag|addon", as.character(sheet), ignore.case = TRUE)
+}
+
+it3_cost_agg_metric_choices <- function(df, sheet) {
+  if (is.null(df) || nrow(df) == 0 || !"type" %in% names(df)) return(character())
+
+  type_vals <- sort(unique(as.character(df$type)))
+  type_vals <- type_vals[!is.na(type_vals) & nzchar(type_vals)]
+  if (length(type_vals) == 0) return(character())
+
+  choices <- choice_names(type_vals, function(x) unname(pretty_stat(x)))
+
+  if (it3_cost_agg_allows_derived_metrics(sheet)) {
+    choices <- c(
+      choices,
+      "Kosten per persoon" = "kosten_per_persoon",
+      "Kosten per gebruiker" = "kosten_per_gebruiker"
+    )
+  }
+
+  choices
+}
+
+prepare_it3_cost_agg_metric_df <- function(df, metric) {
+  if (is.null(df) || nrow(df) == 0) return(tibble::tibble())
+  if (!all(c("t", "type", "value") %in% names(df))) return(tibble::tibble())
+
+  if (!metric %in% c("kosten_per_persoon", "kosten_per_gebruiker")) {
+    return(
+      df |>
+        dplyr::filter(as.character(type) == as.character(metric)) |>
+        dplyr::mutate(metric_value = numericize(value))
+    )
+  }
+
+  sum_df <- df |> dplyr::filter(as.character(type) == "sum_totaal_groep")
+  if (nrow(sum_df) == 0) return(tibble::tibble())
+
+  if (identical(metric, "kosten_per_persoon")) {
+    return(
+      sum_df |>
+        dplyr::mutate(
+          metric_value = dplyr::if_else(
+            is.na(numericize(n_totaal)) | numericize(n_totaal) == 0,
+            NA_real_,
+            numericize(value) / numericize(n_totaal)
+          )
+        )
+    )
+  }
+
+  if (identical(metric, "kosten_per_gebruiker")) {
+    join_cols <- it3_cost_agg_join_cols(df)
+    gebr_df <- df |>
+      dplyr::filter(as.character(type) == "n_totaal_gebruikers") |>
+      dplyr::transmute(
+        dplyr::across(dplyr::all_of(join_cols)),
+        gebruikers_value = numericize(value)
+      )
+
+    return(
+      sum_df |>
+        dplyr::mutate(sum_value = numericize(value)) |>
+        dplyr::left_join(gebr_df, by = join_cols) |>
+        dplyr::mutate(
+          metric_value = dplyr::if_else(
+            is.na(gebruikers_value) | gebruikers_value == 0,
+            NA_real_,
+            sum_value / gebruikers_value
+          )
+        )
+    )
+  }
+
+  tibble::tibble()
+}
+
 regression_sig_label <- function(p) {
   dplyr::case_when(
     is.na(p) ~ "Niet significant",
@@ -821,7 +923,7 @@ regression_sig_label <- function(p) {
 }
 
 regression_sig_palette <- c(
-  "p < 0.01" = "#16A34A",
+  "p < 0.01" = "#2563EB",
   "p < 0.05" = "#EAB308",
   "p < 0.10" = "#F97316",
   "Niet significant" = "#9CA3AF"
@@ -1356,6 +1458,7 @@ ui <- navbarPage(
         sidebarLayout(
           sidebarPanel(
             width = 3,
+            selectInput("it3_cost_dataset", "Dataset", choices = NULL),
             selectInput("it3_cost_name", "Uitkomst (name)", choices = NULL),
             hr(),
             radioButtons(
@@ -1379,11 +1482,8 @@ ui <- navbarPage(
             radioButtons(
               "it3_cost_metric",
               "Kies variabele",
-              choices = c(
-                "Aantal gebruikers" = "n_totaal_gebruikers",
-                "Totale kosten" = "sum_totaal_groep"
-              ),
-              selected = "n_totaal_gebruikers"
+              choices = c("Laden..." = "__loading__"),
+              selected = "__loading__"
             )
           ),
           mainPanel(
@@ -1453,7 +1553,12 @@ server <- function(input, output, session) {
       }
       if ("vektmszsettingzpk" %in% names(it3_zpk_raw)) {
         setting_vals <- ordered_values(it3_zpk_raw$vektmszsettingzpk)
-        updateSelectInput(session, "it3_zpk_setting", choices = setting_vals, selected = setting_vals[[1]])
+        updateSelectInput(
+          session,
+          "it3_zpk_setting",
+          choices = choice_names(setting_vals, pretty_vektmszsettingzpk),
+          selected = setting_vals[[1]]
+        )
       }
       if ("bin_size" %in% names(it3_zpk_raw)) {
         bin_vals <- ordered_values(it3_zpk_raw$bin_size)
@@ -1479,80 +1584,97 @@ server <- function(input, output, session) {
     }
 
     # Kosten over Tijd
-    if (!is.null(it3_cost_agg_raw) && nrow(it3_cost_agg_raw) > 0) {
-      # name selector (across all sheets)
-      if ("name" %in% names(it3_cost_agg_raw)) {
-        name_vals <- sort(unique(as.character(it3_cost_agg_raw$name)))
-        updateSelectInput(
-          session,
-          "it3_cost_name",
-          choices = name_vals,
-          selected = if (length(name_vals) > 0) name_vals[[1]] else NULL
-        )
-      }
-
-      # basic filters
-      if ("cohort" %in% names(it3_cost_agg_raw)) {
-        cohort_vals <- ordered_values(it3_cost_agg_raw$cohort)
-        updateSelectInput(
-          session,
-          "it3_cost_cohort",
-          choices = cohort_vals,
-          selected = if ("2023" %in% cohort_vals) "2023" else cohort_vals[[1]]
-        )
-      }
-      if ("died" %in% names(it3_cost_agg_raw)) {
-        died_vals <- ordered_values(it3_cost_agg_raw$died)
-        updateSelectInput(session, "it3_cost_died", choices = died_vals, selected = died_vals[[1]])
-      }
-      if ("bin_size" %in% names(it3_cost_agg_raw)) {
-        bin_vals <- ordered_values(it3_cost_agg_raw$bin_size)
-        updateSelectInput(session, "it3_cost_bin", choices = bin_vals, selected = bin_vals[[1]])
-      }
+    if (!is.null(it3_cost_agg_raw) && nrow(it3_cost_agg_raw) > 0 && "sheet" %in% names(it3_cost_agg_raw)) {
+      sheet_vals <- sort(unique(as.character(it3_cost_agg_raw$sheet)))
+      updateSelectInput(
+        session,
+        "it3_cost_dataset",
+        choices = choice_names(sheet_vals, pretty_sheet),
+        selected = if (length(sheet_vals) > 0) sheet_vals[[1]] else NULL
+      )
     }
   })
 
   observeEvent(
-    list(it3_cost_agg_raw, input$it3_cost_name),
+    list(it3_cost_agg_raw, input$it3_cost_dataset, input$it3_cost_name),
     {
       df <- it3_cost_agg_raw
       req(!is.null(df), nrow(df) > 0)
+      req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
+      req("sheet" %in% names(df))
 
-      if ("name" %in% names(df) && !is.null(input$it3_cost_name) && nzchar(input$it3_cost_name)) {
-        df <- df |> dplyr::filter(as.character(name) == as.character(input$it3_cost_name))
+      df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
+      req(nrow(df) > 0)
+
+      pick_choice <- function(choices, current = NULL, preferred = NULL) {
+        choices <- choices[!is.na(choices) & nzchar(as.character(choices))]
+        if (length(choices) == 0) return(NULL)
+        if (!is.null(current) && current %in% choices) return(current)
+        if (!is.null(preferred) && preferred %in% choices) return(preferred)
+        choices[[1]]
+      }
+
+      if ("name" %in% names(df)) {
+        name_vals <- sort(unique(as.character(df$name)))
+        name_vals <- name_vals[!is.na(name_vals) & nzchar(name_vals)]
+        req(length(name_vals) > 0)
+        selected_name <- pick_choice(name_vals, input$it3_cost_name)
+        updateSelectInput(
+          session,
+          "it3_cost_name",
+          choices = name_vals,
+          selected = selected_name
+        )
+        df <- df |> dplyr::filter(as.character(name) == as.character(selected_name))
+      }
+
+      if ("cohort" %in% names(df)) {
+        cohort_vals <- ordered_values(df$cohort)
+        selected_cohort <- pick_choice(cohort_vals, input$it3_cost_cohort, preferred = "2023")
+        if (!is.null(selected_cohort)) {
+          updateSelectInput(session, "it3_cost_cohort", choices = cohort_vals, selected = selected_cohort)
+        }
+      }
+      if ("died" %in% names(df)) {
+        died_vals <- ordered_values(df$died)
+        selected_died <- pick_choice(died_vals, input$it3_cost_died)
+        if (!is.null(selected_died)) {
+          updateSelectInput(session, "it3_cost_died", choices = died_vals, selected = selected_died)
+        }
+      }
+      if ("bin_size" %in% names(df)) {
+        bin_vals <- ordered_values(df$bin_size)
+        selected_bin <- pick_choice(bin_vals, input$it3_cost_bin)
+        if (!is.null(selected_bin)) {
+          updateSelectInput(session, "it3_cost_bin", choices = bin_vals, selected = selected_bin)
+        }
       }
 
       if ("wlz_start_period" %in% names(df)) {
         wlz_vals <- ordered_values(df$wlz_start_period)
-        updateSelectInput(
-          session,
-          "it3_cost_wlz_start",
-          choices = wlz_vals,
-          selected = if ("all" %in% wlz_vals) "all" else wlz_vals[[1]]
-        )
+        selected_wlz <- pick_choice(wlz_vals, input$it3_cost_wlz_start, preferred = "all")
+        if (!is.null(selected_wlz)) {
+          updateSelectInput(session, "it3_cost_wlz_start", choices = wlz_vals, selected = selected_wlz)
+        }
       }
 
       if ("provincie" %in% names(df)) {
         prov_vals <- ordered_values(df$provincie)
-        updateSelectInput(
-          session,
-          "it3_cost_provincie",
-          choices = prov_vals,
-          selected = if ("all" %in% prov_vals) "all" else prov_vals[[1]]
-        )
+        selected_prov <- pick_choice(prov_vals, input$it3_cost_provincie, preferred = "all")
+        if (!is.null(selected_prov)) {
+          updateSelectInput(session, "it3_cost_provincie", choices = prov_vals, selected = selected_prov)
+        }
       }
 
       if ("used_any_acp_2years" %in% names(df)) {
         acp_vals <- ordered_values(df$used_any_acp_2years)
-        updateSelectInput(
-          session,
-          "it3_cost_acp",
-          choices = acp_vals,
-          selected = if ("all" %in% acp_vals) "all" else acp_vals[[1]]
-        )
+        selected_acp <- pick_choice(acp_vals, input$it3_cost_acp, preferred = "all")
+        if (!is.null(selected_acp)) {
+          updateSelectInput(session, "it3_cost_acp", choices = acp_vals, selected = selected_acp)
+        }
       }
     },
-    ignoreInit = FALSE
+    ignoreInit = TRUE
   )
 
   it3_zpk_filtered <- reactive({
@@ -1584,6 +1706,10 @@ server <- function(input, output, session) {
     req(!is.null(df), nrow(df) > 0)
 
     split_var <- input$it3_cost_split_var %||% "none"
+
+    if ("sheet" %in% names(df) && !is.null(input$it3_cost_dataset) && nzchar(input$it3_cost_dataset)) {
+      df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
+    }
 
     # Filter by selected outcome (name)
     if ("name" %in% names(df) && !is.null(input$it3_cost_name) && nzchar(input$it3_cost_name)) {
@@ -1638,21 +1764,40 @@ server <- function(input, output, session) {
     df
   })
 
+  observe({
+    df <- it3_cost_agg_filtered()
+    if (is.null(df) || nrow(df) == 0 || !"type" %in% names(df)) return()
+
+    choices <- it3_cost_agg_metric_choices(df, input$it3_cost_dataset)
+    if (length(choices) == 0) return()
+
+    type_vals <- sort(unique(as.character(df$type)))
+    type_vals <- type_vals[!is.na(type_vals) & nzchar(type_vals)]
+
+    selected <- input$it3_cost_metric
+    if (is.null(selected) || identical(selected, "__loading__") || !selected %in% unname(choices)) {
+      selected <- dplyr::case_when(
+        "n_totaal_gebruikers" %in% type_vals ~ "n_totaal_gebruikers",
+        "sum_totaal_groep" %in% type_vals ~ "sum_totaal_groep",
+        TRUE ~ type_vals[[1]]
+      )
+    }
+
+    updateRadioButtons(session, "it3_cost_metric", choices = choices, selected = selected)
+  })
+
   output$it3_plot_cost_agg <- renderPlotly({
     df <- it3_cost_agg_filtered()
-    metric <- input$it3_cost_metric %||% "n_totaal_gebruikers"
+    metric <- input$it3_cost_metric
+    req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
     split_var <- input$it3_cost_split_var %||% "none"
 
-    req("t" %in% names(df), "type" %in% names(df), "value" %in% names(df))
-    
-    # Filter by metric type
-    df <- df |> dplyr::filter(as.character(type) == as.character(metric))
+    df <- prepare_it3_cost_agg_metric_df(df, metric)
 
     df <- df |>
       dplyr::mutate(
         t_num = numericize(t),
         t_label = as.character(t),
-        metric_value = numericize(value),
         split_value = if (split_var == "none" || !split_var %in% names(df)) NA_character_ else as.character(.data[[split_var]]),
         died_label = if ("died" %in% names(df)) population_label(died) else "Totaal"
       ) |>
@@ -1670,7 +1815,7 @@ server <- function(input, output, session) {
       tooltip_text <- paste0(
         "t: ", df$t_label, "<br>",
         "Populatie: ", df$died_label, "<br>",
-        "Waarde: ", scales::comma(df$metric_value, big.mark = ",", decimal.mark = ".")
+        "Waarde: ", it3_cost_agg_format_value(df$metric_value, metric)
       )
 
       p <- ggplot2::ggplot(
@@ -1695,7 +1840,7 @@ server <- function(input, output, session) {
       tooltip_text <- paste0(
         "t: ", df$t_label, "<br>",
         split_var, ": ", df$split_value, "<br>",
-        "Waarde: ", scales::comma(df$metric_value, big.mark = ",", decimal.mark = ".")
+        "Waarde: ", it3_cost_agg_format_value(df$metric_value, metric)
       )
 
       p <- ggplot2::ggplot(
@@ -1755,7 +1900,7 @@ server <- function(input, output, session) {
       "Iteratie 3 | ZPK categorieën tellingen",
       paste0("died: ", input$it3_zpk_died %||% "-"),
       paste0("cohort: ", input$it3_zpk_cohort %||% "-"),
-      paste0("setting: ", input$it3_zpk_setting %||% "-"),
+      paste0("setting: ", pretty_vektmszsettingzpk(input$it3_zpk_setting %||% "-")),
       paste0("bin: ", input$it3_zpk_bin %||% "-"),
       paste0("prestatietype: ", input$it3_zpk_prestatie_type %||% "-"),
       paste0("variabele: ", metric)

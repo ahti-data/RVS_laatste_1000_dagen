@@ -1,1 +1,1 @@
-[shiny.error] object 'plotly_html' not found
+[shiny.error] cannot coerce type 'closure' to vector of type 'character'
