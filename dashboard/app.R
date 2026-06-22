@@ -776,7 +776,7 @@ pick_first_existing <- function(paths) {
   if (length(hit) == 0) NA_character_ else hit[[1]]
 }
 
-resolve_iteration3_file <- function(pattern) {
+resolve_iteration3_file <- function(pattern, prefer_basename = NULL) {
   dirs <- c(
     "dashboard/data/data_iteration_3",
     "data/data_iteration_3"
@@ -788,7 +788,18 @@ resolve_iteration3_file <- function(pattern) {
     globs <- globs[!grepl("^~\\$", basename(globs))] # ignore Excel lock files
     candidates <- c(candidates, globs)
   }
-  pick_first_existing(unique(candidates))
+  candidates <- unique(candidates)
+  if (length(candidates) == 0) return(NA_character_)
+
+  if (!is.null(prefer_basename) && nzchar(prefer_basename)) {
+    preferred <- candidates[basename(candidates) == prefer_basename]
+    if (length(preferred) > 0) return(preferred[[1]])
+  }
+
+  # Dated backup copies may linger on the server; prefer the newest match.
+  info <- file.info(candidates)
+  candidates <- candidates[order(info$mtime, decreasing = TRUE, na.last = TRUE)]
+  candidates[[1]]
 }
 
 read_iteration3_xlsx <- function(path) {
@@ -1047,7 +1058,10 @@ read_iteration3_regression <- function(path) {
 }
 
 data_path_iteration3_cost_agg <- resolve_iteration3_file("*cost_aggregations.xlsx")
-data_path_iteration3_zpk <- resolve_iteration3_file("*zpk_categorieen_tellingen*.xlsx")
+data_path_iteration3_zpk <- resolve_iteration3_file(
+  "*zpk_categorieen_tellingen*.xlsx",
+  prefer_basename = "zpk_categorieen_tellingen.xlsx"
+)
 data_path_iteration3_top50 <- resolve_iteration3_file("*top50_activiteiten*.xlsx")
 data_path_iteration3_regression <- resolve_iteration3_file("*regression_results.xlsx")
 
@@ -1122,6 +1136,16 @@ doodsoorzaken <- if (nrow(all_data_initial) > 0) {
 
 log_msg(sprintf("[startup] Initialization complete: %d base names, %d doodsoorzaken", 
                 length(base_names), length(doodsoorzaken)))
+
+if (!is.na(data_path_iteration3_zpk) && nzchar(data_path_iteration3_zpk)) {
+  prest_col <- it3_zpk_prestatie_colname(it3_zpk_raw)
+  log_msg(sprintf(
+    "[startup] Iteratie 3 ZPK: %s (%d rows, prestatie_col=%s)",
+    data_path_iteration3_zpk,
+    if (is.null(it3_zpk_raw)) 0L else nrow(it3_zpk_raw),
+    if (is.na(prest_col)) "MISSING" else prest_col
+  ))
+}
 
 # ===== HELPER FUNCTIONS =====
 find_gebruikt_name <- function(name_choice, data) {
@@ -1423,6 +1447,7 @@ ui <- navbarPage(
               choices = c("DBC" = "DBC", "OZP" = "OZP"),
               selected = "DBC"
             ),
+            uiOutput("it3_zpk_prestatie_notice"),
             radioButtons(
               "it3_zpk_metric",
               "Kies variabele",
@@ -1563,6 +1588,16 @@ server <- function(input, output, session) {
   # ==========================================
   # SERVER LOGIC: ITERATIE 3
   # ==========================================
+
+  output$it3_zpk_prestatie_notice <- renderUI({
+    prest_col <- it3_zpk_prestatie_colname(it3_zpk_raw)
+    if (!is.na(prest_col)) return(NULL)
+    helpText(
+      "Waarschuwing: geladen ZPK-bestand mist kolom prestatie_type (",
+      basename(data_path_iteration3_zpk %||% "onbekend"),
+      "). DBC/OZP-filter werkt dan niet."
+    )
+  })
 
   observe({
     # ZPK categorieën tellingen
