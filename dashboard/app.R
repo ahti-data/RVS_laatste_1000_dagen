@@ -171,7 +171,7 @@ it3_zpk_combine_prestatie_types <- function(df) {
 
   group_cols <- it3_zpk_group_cols(df)
   sum_cols <- intersect(
-    c("n_totaal_gebruikers", "n_totaal_declaraties", "sum_totaal_groep"),
+    c("n_totaal_declaraties", "sum_totaal_groep"),
     names(df)
   )
   if (length(group_cols) == 0 || length(sum_cols) == 0) return(df)
@@ -182,17 +182,6 @@ it3_zpk_combine_prestatie_types <- function(df) {
       dplyr::across(dplyr::all_of(sum_cols), ~ sum(numericize(.x), na.rm = TRUE)),
       .groups = "drop"
     )
-
-  if (all(c("sum_totaal_groep", "n_totaal_declaraties") %in% names(out))) {
-    out <- out |>
-      dplyr::mutate(
-        median_cost_per_declaratie = dplyr::if_else(
-          is.na(n_totaal_declaraties) | n_totaal_declaraties == 0,
-          NA_real_,
-          sum_totaal_groep / n_totaal_declaraties
-        )
-      )
-  }
 
   if ("prestatie_type" %in% names(df)) {
     out$prestatie_type <- "All"
@@ -210,6 +199,57 @@ pretty_it3_zpk_metric <- function(x) {
     median_cost_per_declaratie = "Mediaan kosten per declaratie",
     gemiddelde_kosten_per_persoon = "Gemiddelde kosten per persoon",
     .default = as.character(x)
+  )
+}
+
+it3_zpk_metric_choices <- c(
+  "Aantal gebruikers" = "n_totaal_gebruikers",
+  "Aantal declaraties" = "n_totaal_declaraties",
+  "Totale kosten" = "sum_totaal_groep",
+  "Mediaan kosten per declaratie" = "median_cost_per_declaratie",
+  "Gemiddelde kosten per persoon" = "gemiddelde_kosten_per_persoon"
+)
+
+it3_zpk_metrics_disabled_for_all <- c("n_totaal_gebruikers", "median_cost_per_declaratie")
+
+it3_zpk_pick_metric <- function(selected, is_all) {
+  enabled <- if (is_all) {
+    setdiff(unname(it3_zpk_metric_choices), it3_zpk_metrics_disabled_for_all)
+  } else {
+    unname(it3_zpk_metric_choices)
+  }
+  if (!is.null(selected) && selected %in% enabled) return(selected)
+  if ("sum_totaal_groep" %in% enabled) return("sum_totaal_groep")
+  enabled[[1]]
+}
+
+it3_zpk_metric_ui <- function(selected, is_all) {
+  selected <- it3_zpk_pick_metric(selected, is_all)
+  disabled_vals <- if (is_all) it3_zpk_metrics_disabled_for_all else character()
+
+  tags$div(
+    tags$label(class = "control-label", "Kies variabele"),
+    tags$div(
+      class = "shiny-options-group",
+      lapply(names(it3_zpk_metric_choices), function(lbl) {
+        val <- unname(it3_zpk_metric_choices[[lbl]])
+        disabled <- val %in% disabled_vals
+        tags$div(
+          class = "radio",
+          tags$label(
+            style = if (disabled) "color: #9CA3AF; cursor: not-allowed;" else NULL,
+            tags$input(
+              type = "radio",
+              name = "it3_zpk_metric",
+              value = val,
+              checked = identical(val, selected),
+              disabled = disabled
+            ),
+            lbl
+          )
+        )
+      })
+    )
   )
 }
 
@@ -1520,18 +1560,7 @@ ui <- navbarPage(
               selected = "DBC"
             ),
             uiOutput("it3_zpk_prestatie_notice"),
-            radioButtons(
-              "it3_zpk_metric",
-              "Kies variabele",
-              choices = c(
-                "Aantal gebruikers" = "n_totaal_gebruikers",
-                "Aantal declaraties" = "n_totaal_declaraties",
-                "Totale kosten" = "sum_totaal_groep",
-                "Mediaan kosten per declaratie" = "median_cost_per_declaratie",
-                "Gemiddelde kosten per persoon" = "gemiddelde_kosten_per_persoon"
-              ),
-              selected = "n_totaal_gebruikers"
-            )
+            uiOutput("it3_zpk_metric_ui")
           ),
           mainPanel(
             width = 9,
@@ -1670,6 +1699,13 @@ server <- function(input, output, session) {
       basename(data_path_iteration3_zpk %||% "onbekend"),
       "). DBC/OZP-filter werkt dan niet."
     )
+  })
+
+  output$it3_zpk_metric_ui <- renderUI({
+    prest_sel <- normalize_it3_filter_value(input$it3_zpk_prestatie_type)
+    prest_sel <- if (length(prest_sel) == 1) prest_sel else "DBC"
+    is_all <- identical(prest_sel, "All")
+    it3_zpk_metric_ui(isolate(input$it3_zpk_metric), is_all)
   })
 
   observe({
@@ -2028,7 +2064,9 @@ server <- function(input, output, session) {
 
   output$it3_plot_zpk <- renderPlotly({
     df <- it3_zpk_filtered()
-    metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
+    prest_sel <- normalize_it3_filter_value(input$it3_zpk_prestatie_type)
+    prest_sel <- if (length(prest_sel) == 1) prest_sel else "DBC"
+    metric <- it3_zpk_pick_metric(input$it3_zpk_metric, identical(prest_sel, "All"))
 
     req("t" %in% names(df), "zpk_category" %in% names(df))
     if (!identical(metric, "gemiddelde_kosten_per_persoon")) {
@@ -2244,7 +2282,9 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       df <- it3_zpk_filtered()
-      metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
+      prest_sel <- normalize_it3_filter_value(input$it3_zpk_prestatie_type)
+      prest_sel <- if (length(prest_sel) == 1) prest_sel else "DBC"
+      metric <- it3_zpk_pick_metric(input$it3_zpk_metric, identical(prest_sel, "All"))
       if (identical(metric, "gemiddelde_kosten_per_persoon") &&
           all(c("sum_totaal_groep", "n_totaal_population") %in% names(df))) {
         df <- df |>
