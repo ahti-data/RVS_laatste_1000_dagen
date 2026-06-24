@@ -1014,14 +1014,14 @@ it3_cost_metric_choices_combined <- function(df, sheet, names_keep) {
   if (is.null(df) || nrow(df) == 0 || length(names_keep) == 0) return(character())
 
   per_name <- lapply(names_keep, function(nm) {
-    sub <- df |> dplyr::filter(as.character(name) == nm)
+    sub <- df |> dplyr::filter(as.character(.data$name) == nm)
     unname(it3_cost_agg_metric_choices(sub, sheet))
   })
   common <- Reduce(intersect, per_name)
   if (length(common) == 0) return(character())
 
   full <- it3_cost_agg_metric_choices(
-    df |> dplyr::filter(as.character(name) %in% names_keep),
+    df |> dplyr::filter(as.character(.data$name) %in% names_keep),
     sheet
   )
   full[unname(full) %in% common]
@@ -2021,7 +2021,7 @@ server <- function(input, output, session) {
     # Filter by selected outcome(s) (name)
     names_keep <- selected_it3_cost_names()
     if ("name" %in% names(df) && length(names_keep) > 0) {
-      df <- df |> dplyr::filter(as.character(name) %in% names_keep)
+      df <- df |> dplyr::filter(as.character(.data$name) %in% names_keep)
     }
 
     # Apply demographic filters / split handling
@@ -2105,14 +2105,40 @@ server <- function(input, output, session) {
     sheet <- input$it3_cost_dataset
 
     df <- prepare_it3_cost_agg_metric_df(df, metric)
+    if (nrow(df) == 0) {
+      return(
+        plotly::plot_ly() |>
+          plotly::layout(
+            annotations = list(
+              list(
+                text = "Geen data beschikbaar voor deze selectie.",
+                xref = "paper",
+                yref = "paper",
+                x = 0.5,
+                y = 0.5,
+                showarrow = FALSE
+              )
+            )
+          )
+      )
+    }
+
+    if ("name" %in% names(df)) {
+      df$outcome_label <- pretty_metric_name(df$name, sheet)
+    } else {
+      df$outcome_label <- "Uitkomst"
+    }
+    if ("died" %in% names(df)) {
+      df$died_label <- population_label(df$died)
+    } else {
+      df$died_label <- "Totaal"
+    }
 
     df <- df |>
       dplyr::mutate(
         t_num = numericize(t),
         t_label = as.character(t),
-        split_value = if (split_var == "none" || !split_var %in% names(df)) NA_character_ else as.character(.data[[split_var]]),
-        died_label = if ("died" %in% names(df)) population_label(died) else "Totaal",
-        outcome_label = if ("name" %in% names(df)) pretty_metric_name(name, sheet) else "Uitkomst"
+        split_value = if (split_var == "none" || !split_var %in% names(df)) NA_character_ else as.character(.data[[split_var]])
       ) |>
       dplyr::filter(!is.na(metric_value))
 
@@ -2171,7 +2197,7 @@ server <- function(input, output, session) {
           x = t_num,
           y = metric_value,
           color = split_value,
-          group = interaction(split_value, outcome_label, drop = TRUE),
+          group = paste(split_value, outcome_label),
           text = tooltip_text
         )
       ) +
