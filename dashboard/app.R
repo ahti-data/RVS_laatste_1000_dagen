@@ -962,9 +962,21 @@ it3_cost_agg_join_cols <- function(df) {
 it3_cost_agg_format_value <- function(x, metric) {
   if (metric %in% c("kosten_per_persoon", "kosten_per_gebruiker")) {
     scales::number(x, big.mark = ",", decimal.mark = ".", accuracy = 0.01)
+  } else if (identical(metric, "prevalentie_gebruik")) {
+    scales::percent(x, accuracy = 0.01, big.mark = ",", decimal.mark = ".")
   } else {
     scales::comma(x, big.mark = ",", decimal.mark = ".")
   }
+}
+
+it3_cost_metric_label <- function(metric) {
+  dplyr::recode(
+    metric,
+    kosten_per_persoon = "Kosten per persoon",
+    kosten_per_gebruiker = "Kosten per gebruiker",
+    prevalentie_gebruik = "Prevalentie/gebruik",
+    .default = unname(pretty_stat(metric))
+  )
 }
 
 it3_cost_agg_allows_derived_metrics <- function(sheet) {
@@ -982,21 +994,46 @@ it3_cost_agg_metric_choices <- function(df, sheet) {
   choices <- choice_names(type_vals, function(x) unname(pretty_stat(x)))
 
   if (it3_cost_agg_allows_derived_metrics(sheet)) {
-    choices <- c(
-      choices,
-      "Kosten per persoon" = "kosten_per_persoon",
-      "Kosten per gebruiker" = "kosten_per_gebruiker"
-    )
+    derived <- c()
+    if ("sum_totaal_groep" %in% type_vals) {
+      derived <- c(derived, "Kosten per persoon" = "kosten_per_persoon")
+    }
+    if (all(c("sum_totaal_groep", "n_totaal_gebruikers") %in% type_vals)) {
+      derived <- c(derived, "Kosten per gebruiker" = "kosten_per_gebruiker")
+    }
+    if ("n_totaal_gebruikers" %in% type_vals) {
+      derived <- c(derived, "Prevalentie/gebruik" = "prevalentie_gebruik")
+    }
+    choices <- c(choices, derived)
   }
 
   choices
+}
+
+it3_cost_metric_choices_combined <- function(df, sheet, names_keep) {
+  if (is.null(df) || nrow(df) == 0 || length(names_keep) == 0) return(character())
+
+  per_name <- lapply(names_keep, function(nm) {
+    sub <- df |> dplyr::filter(as.character(name) == nm)
+    unname(it3_cost_agg_metric_choices(sub, sheet))
+  })
+  common <- Reduce(intersect, per_name)
+  if (length(common) == 0) return(character())
+
+  full <- it3_cost_agg_metric_choices(
+    df |> dplyr::filter(as.character(name) %in% names_keep),
+    sheet
+  )
+  full[unname(full) %in% common]
 }
 
 prepare_it3_cost_agg_metric_df <- function(df, metric) {
   if (is.null(df) || nrow(df) == 0) return(tibble::tibble())
   if (!all(c("t", "type", "value") %in% names(df))) return(tibble::tibble())
 
-  if (!metric %in% c("kosten_per_persoon", "kosten_per_gebruiker")) {
+  derived_metrics <- c("kosten_per_persoon", "kosten_per_gebruiker", "prevalentie_gebruik")
+
+  if (!metric %in% derived_metrics) {
     return(
       df |>
         dplyr::filter(as.character(type) == as.character(metric)) |>
@@ -1038,6 +1075,22 @@ prepare_it3_cost_agg_metric_df <- function(df, metric) {
             is.na(gebruikers_value) | gebruikers_value == 0,
             NA_real_,
             sum_value / gebruikers_value
+          )
+        )
+    )
+  }
+
+  if (identical(metric, "prevalentie_gebruik")) {
+    gebr_df <- df |> dplyr::filter(as.character(type) == "n_totaal_gebruikers")
+    if (nrow(gebr_df) == 0) return(tibble::tibble())
+
+    return(
+      gebr_df |>
+        dplyr::mutate(
+          metric_value = dplyr::if_else(
+            is.na(numericize(n_totaal)) | numericize(n_totaal) == 0,
+            NA_real_,
+            numericize(value) / numericize(n_totaal)
           )
         )
     )
@@ -1603,7 +1656,7 @@ ui <- navbarPage(
           sidebarPanel(
             width = 3,
             selectInput("it3_cost_dataset", "Dataset", choices = NULL),
-            selectInput("it3_cost_name", "Uitkomst (name)", choices = NULL),
+            uiOutput("it3_cost_name_ui"),
             hr(),
             radioButtons(
               "it3_cost_split_var",
@@ -1771,7 +1824,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(
-    list(it3_cost_agg_raw, input$it3_cost_dataset, input$it3_cost_name),
+    list(it3_cost_agg_raw, input$it3_cost_dataset),
     {
       df <- it3_cost_agg_raw
       req(!is.null(df), nrow(df) > 0)
@@ -1787,20 +1840,6 @@ server <- function(input, output, session) {
         if (!is.null(current) && current %in% choices) return(current)
         if (!is.null(preferred) && preferred %in% choices) return(preferred)
         choices[[1]]
-      }
-
-      if ("name" %in% names(df)) {
-        name_vals <- sort(unique(as.character(df$name)))
-        name_vals <- name_vals[!is.na(name_vals) & nzchar(name_vals)]
-        req(length(name_vals) > 0)
-        selected_name <- pick_choice(name_vals, input$it3_cost_name)
-        updateSelectInput(
-          session,
-          "it3_cost_name",
-          choices = name_vals,
-          selected = selected_name
-        )
-        df <- df |> dplyr::filter(as.character(name) == as.character(selected_name))
       }
 
       if ("cohort" %in% names(df)) {
@@ -1852,6 +1891,99 @@ server <- function(input, output, session) {
     ignoreInit = TRUE
   )
 
+  selected_it3_cost_names <- reactive({
+    df <- it3_cost_agg_raw
+    req(!is.null(df), nrow(df) > 0, "name" %in% names(df))
+    req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
+
+    df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
+    req(nrow(df) > 0)
+
+    names_choices <- sort(unique(as.character(df$name)))
+    names_choices <- names_choices[!is.na(names_choices) & nzchar(names_choices)]
+    req(length(names_choices) > 0)
+
+    split_var <- input$it3_cost_split_var %||% "none"
+    if (!identical(split_var, "none")) {
+      selected <- intersect(input$it3_cost_name_single %||% character(0), names_choices)
+      if (length(selected) == 0) selected <- intersect(input$it3_cost_name_multi %||% character(0), names_choices)
+      if (length(selected) == 0) selected <- names_choices[[1]]
+      return(selected[[1]])
+    }
+
+    if (identical(input$it3_cost_name_mode %||% "single", "multi")) {
+      selected <- intersect(input$it3_cost_name_multi %||% character(0), names_choices)
+    } else {
+      selected <- intersect(input$it3_cost_name_single %||% character(0), names_choices)
+    }
+    if (length(selected) == 0) selected <- names_choices[[1]]
+    selected
+  })
+
+  output$it3_cost_name_ui <- renderUI({
+    df <- it3_cost_agg_raw
+    req(!is.null(df), nrow(df) > 0, "name" %in% names(df))
+    req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
+
+    df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
+    req(nrow(df) > 0)
+
+    names_choices <- sort(unique(as.character(df$name)))
+    names_choices <- names_choices[!is.na(names_choices) & nzchar(names_choices)]
+    req(length(names_choices) > 0)
+
+    split_var <- input$it3_cost_split_var %||% "none"
+    single_selected <- intersect(isolate(input$it3_cost_name_single) %||% character(0), names_choices)
+    multi_selected <- intersect(isolate(input$it3_cost_name_multi) %||% character(0), names_choices)
+    if (length(single_selected) == 0) {
+      single_selected <- intersect(multi_selected, names_choices)
+      if (length(single_selected) == 0) single_selected <- names_choices[[1]]
+    }
+    if (length(multi_selected) == 0) multi_selected <- single_selected
+
+    choices <- choice_names(names_choices, function(x) pretty_metric_name(x, input$it3_cost_dataset))
+    if (!identical(split_var, "none")) {
+      return(selectInput("it3_cost_name_single", "Uitkomst", choices = choices, selected = single_selected[[1]]))
+    }
+
+    mode <- input$it3_cost_name_mode %||% "single"
+    tagList(
+      radioButtons(
+        "it3_cost_name_mode",
+        "Keuze uitkomst",
+        choices = c("Een uitkomst" = "single", "Meerdere uitkomsten" = "multi"),
+        selected = if (mode %in% c("single", "multi")) mode else "single"
+      ),
+      if (identical(mode, "multi")) {
+        tagList(
+          div(
+            style = "display: flex; gap: 8px; margin-bottom: 8px;",
+            actionButton("it3_cost_select_all", "Alles selecteren"),
+            actionButton("it3_cost_select_none", "Alles wissen")
+          ),
+          checkboxGroupInput("it3_cost_name_multi", "Uitkomst", choices = choices, selected = multi_selected)
+        )
+      } else {
+        selectInput("it3_cost_name_single", "Uitkomst", choices = choices, selected = single_selected[[1]])
+      }
+    )
+  })
+
+  observeEvent(input$it3_cost_select_all, {
+    df <- it3_cost_agg_raw
+    req(!is.null(df), nrow(df) > 0, "name" %in% names(df))
+    req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
+    name_vals <- df |>
+      dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset)) |>
+      dplyr::pull(name) |>
+      unique()
+    updateCheckboxGroupInput(session, "it3_cost_name_multi", selected = sort(as.character(name_vals)))
+  })
+
+  observeEvent(input$it3_cost_select_none, {
+    updateCheckboxGroupInput(session, "it3_cost_name_multi", selected = character(0))
+  })
+
   it3_zpk_filtered <- reactive({
     df <- it3_zpk_raw
     req(!is.null(df), nrow(df) > 0)
@@ -1886,9 +2018,10 @@ server <- function(input, output, session) {
       df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
     }
 
-    # Filter by selected outcome (name)
-    if ("name" %in% names(df) && !is.null(input$it3_cost_name) && nzchar(input$it3_cost_name)) {
-      df <- df |> dplyr::filter(as.character(name) == as.character(input$it3_cost_name))
+    # Filter by selected outcome(s) (name)
+    names_keep <- selected_it3_cost_names()
+    if ("name" %in% names(df) && length(names_keep) > 0) {
+      df <- df |> dplyr::filter(as.character(name) %in% names_keep)
     }
 
     # Apply demographic filters / split handling
@@ -1943,7 +2076,10 @@ server <- function(input, output, session) {
     df <- it3_cost_agg_filtered()
     if (is.null(df) || nrow(df) == 0 || !"type" %in% names(df)) return()
 
-    choices <- it3_cost_agg_metric_choices(df, input$it3_cost_dataset)
+    names_keep <- selected_it3_cost_names()
+    if (length(names_keep) == 0) return()
+
+    choices <- it3_cost_metric_choices_combined(df, input$it3_cost_dataset, names_keep)
     if (length(choices) == 0) return()
 
     type_vals <- sort(unique(as.character(df$type)))
@@ -1954,7 +2090,7 @@ server <- function(input, output, session) {
       selected <- dplyr::case_when(
         "n_totaal_gebruikers" %in% type_vals ~ "n_totaal_gebruikers",
         "sum_totaal_groep" %in% type_vals ~ "sum_totaal_groep",
-        TRUE ~ type_vals[[1]]
+        TRUE ~ unname(choices)[[1]]
       )
     }
 
@@ -1966,6 +2102,7 @@ server <- function(input, output, session) {
     metric <- input$it3_cost_metric
     req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
     split_var <- input$it3_cost_split_var %||% "none"
+    sheet <- input$it3_cost_dataset
 
     df <- prepare_it3_cost_agg_metric_df(df, metric)
 
@@ -1974,11 +2111,15 @@ server <- function(input, output, session) {
         t_num = numericize(t),
         t_label = as.character(t),
         split_value = if (split_var == "none" || !split_var %in% names(df)) NA_character_ else as.character(.data[[split_var]]),
-        died_label = if ("died" %in% names(df)) population_label(died) else "Totaal"
+        died_label = if ("died" %in% names(df)) population_label(died) else "Totaal",
+        outcome_label = if ("name" %in% names(df)) pretty_metric_name(name, sheet) else "Uitkomst"
       ) |>
       dplyr::filter(!is.na(metric_value))
 
     req(nrow(df) > 0)
+
+    multiple_outcomes <- "name" %in% names(df) && dplyr::n_distinct(df$name) > 1
+    y_label <- it3_cost_metric_label(metric)
 
     if (split_var == "none") {
       # Bar chart mode
@@ -1988,6 +2129,7 @@ server <- function(input, output, session) {
         dplyr::pull(t_label)
 
       tooltip_text <- paste0(
+        if (multiple_outcomes) paste0("Uitkomst: ", df$outcome_label, "<br>") else "",
         "t: ", df$t_label, "<br>",
         "Populatie: ", df$died_label, "<br>",
         "Waarde: ", it3_cost_agg_format_value(df$metric_value, metric)
@@ -2006,13 +2148,18 @@ server <- function(input, output, session) {
         ggplot2::scale_fill_manual(values = population_palette) +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank()) +
-        ggplot2::labs(x = "t", y = NULL, fill = "Populatie")
+        ggplot2::labs(x = "t", y = y_label, fill = "Populatie")
+
+      if (multiple_outcomes) {
+        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "free_y")
+      }
     } else {
       # Line chart mode
       df <- df |>
-        dplyr::arrange(split_value, t_num)
+        dplyr::arrange(outcome_label, split_value, t_num)
 
       tooltip_text <- paste0(
+        if (multiple_outcomes) paste0("Uitkomst: ", df$outcome_label, "<br>") else "",
         "t: ", df$t_label, "<br>",
         split_var, ": ", df$split_value, "<br>",
         "Waarde: ", it3_cost_agg_format_value(df$metric_value, metric)
@@ -2024,7 +2171,7 @@ server <- function(input, output, session) {
           x = t_num,
           y = metric_value,
           color = split_value,
-          group = split_value,
+          group = interaction(split_value, outcome_label, drop = TRUE),
           text = tooltip_text
         )
       ) +
@@ -2032,7 +2179,11 @@ server <- function(input, output, session) {
         ggplot2::geom_point(size = 2) +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank()) +
-        ggplot2::labs(x = "t", y = NULL, color = split_var)
+        ggplot2::labs(x = "t", y = y_label, color = split_var)
+
+      if (multiple_outcomes) {
+        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "free_y")
+      }
     }
 
     plotly::ggplotly(p, tooltip = "text") |>
