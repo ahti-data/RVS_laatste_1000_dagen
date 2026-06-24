@@ -1199,6 +1199,45 @@ build_it3_cost_map_sf <- function(metric_df, provincies_sf) {
   dplyr::left_join(geo, prov_data, by = c("name" = "provincie"))
 }
 
+it3_map_uses_diverging_scale <- function(metric) {
+  metric %in% c("kosten_per_persoon", "kosten_per_gebruiker", "prevalentie_gebruik")
+}
+
+it3_map_fill_scale <- function(metric, metric_label, valid_vals) {
+  if (it3_map_uses_diverging_scale(metric)) {
+    min_val <- min(valid_vals, na.rm = TRUE)
+    max_val <- max(valid_vals, na.rm = TRUE)
+    if (!is.finite(min_val) || !is.finite(max_val)) {
+      min_val <- 0
+      max_val <- 1
+    } else if (identical(min_val, max_val)) {
+      pad <- max(abs(min_val) * 0.001, 1e-6)
+      min_val <- min_val - pad
+      max_val <- max_val + pad
+    }
+
+    return(ggplot2::scale_fill_gradientn(
+      colours = c("#0571b0", "#FFFFFF", "#ca0020"),
+      limits = c(min_val, max_val),
+      na.value = "grey85",
+      name = metric_label
+    ))
+  }
+
+  max_val <- max(valid_vals, na.rm = TRUE)
+  if (!is.finite(max_val) || max_val <= 0) {
+    max_val <- 1
+  }
+
+  ggplot2::scale_fill_gradient(
+    low = "#FFFFFF",
+    high = "#2C3E7A",
+    limits = c(0, max_val),
+    na.value = "grey85",
+    name = metric_label
+  )
+}
+
 build_it3_cost_map_plot <- function(map_sf, metric, cohort, died) {
   metric_label <- it3_cost_metric_label(metric)
   cohort_label <- cohort %||% "-"
@@ -1231,24 +1270,13 @@ build_it3_cost_map_plot <- function(map_sf, metric, cohort, died) {
     )
   }
 
-  max_val <- max(valid_vals, na.rm = TRUE)
-  if (!is.finite(max_val) || max_val <= 0) {
-    max_val <- 1
-  }
-
   ggplot2::ggplot(map_sf) +
     ggplot2::geom_sf(
       ggplot2::aes(fill = metric_value),
       color = "grey40",
       linewidth = 0.3
     ) +
-    ggplot2::scale_fill_gradient(
-      low = "#FFFFFF",
-      high = "#2C3E7A",
-      limits = c(0, max_val),
-      na.value = "grey85",
-      name = metric_label
-    ) +
+    it3_map_fill_scale(metric, metric_label, valid_vals) +
     ggplot2::labs(
       title = sprintf("Totaal 1000 dagen (%s, %s)", metric_label, cohort_label),
       subtitle = sprintf("Populatie: %s | MSZ vergoed bedrag ZVW", died_label)
