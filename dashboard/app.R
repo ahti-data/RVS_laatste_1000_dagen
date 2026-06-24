@@ -2177,7 +2177,7 @@ server <- function(input, output, session) {
         ggplot2::labs(x = "t", y = y_label, fill = "Populatie")
 
       if (multiple_outcomes) {
-        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "free_y")
+        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "fixed")
       }
     } else {
       # Line chart mode
@@ -2208,7 +2208,7 @@ server <- function(input, output, session) {
         ggplot2::labs(x = "t", y = y_label, color = split_var)
 
       if (multiple_outcomes) {
-        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "free_y")
+        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "fixed")
       }
     }
 
