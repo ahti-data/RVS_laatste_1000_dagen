@@ -1203,6 +1203,14 @@ it3_map_uses_diverging_scale <- function(metric) {
   metric %in% c("kosten_per_persoon", "kosten_per_gebruiker", "prevalentie_gebruik")
 }
 
+it3_map_prgn_colours <- function() {
+  # Matches plotly's ColorBrewer PRGn colorscale stops.
+  c(
+    "#40004B", "#762A83", "#9970AB", "#C2A5CF", "#E7D4E8", "#F7F7F7",
+    "#D9F0D3", "#A6DBA0", "#5AAE61", "#1B7837", "#00441B"
+  )
+}
+
 it3_map_fill_scale <- function(metric, metric_label, valid_vals) {
   if (it3_map_uses_diverging_scale(metric)) {
     min_val <- min(valid_vals, na.rm = TRUE)
@@ -1217,7 +1225,7 @@ it3_map_fill_scale <- function(metric, metric_label, valid_vals) {
     }
 
     return(ggplot2::scale_fill_gradientn(
-      colours = c("#0571b0", "#FFFFFF", "#ca0020"),
+      colours = it3_map_prgn_colours(),
       limits = c(min_val, max_val),
       na.value = "grey85",
       name = metric_label
