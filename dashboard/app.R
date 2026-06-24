@@ -1100,6 +1100,16 @@ prepare_it3_cost_agg_metric_df <- function(df, metric) {
   tibble::tibble()
 }
 
+prepare_it3_cost_agg_export_df <- function(df, metric) {
+  out <- prepare_it3_cost_agg_metric_df(df, metric)
+  if (nrow(out) == 0) return(out)
+
+  label <- it3_cost_metric_label(metric)
+  out |>
+    dplyr::mutate(!!label := metric_value) |>
+    dplyr::select(-dplyr::any_of(c("metric_value", "type", "sum_value", "gebruikers_value")))
+}
+
 it3_map_sheet <- "msz_prestaties"
 it3_map_name <- "vektmszvergoedbedragzvw"
 
@@ -2404,7 +2414,10 @@ server <- function(input, output, session) {
       paste0("iteratie3_cost_agg_", input$it3_cost_metric %||% "metric", "_", Sys.Date(), ".xlsx")
     },
     content = function(file) {
-      writexl::write_xlsx(it3_cost_agg_filtered(), file)
+      metric <- input$it3_cost_metric
+      req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
+      df <- prepare_it3_cost_agg_export_df(it3_cost_agg_filtered(), metric)
+      writexl::write_xlsx(df, file)
     }
   )
 
