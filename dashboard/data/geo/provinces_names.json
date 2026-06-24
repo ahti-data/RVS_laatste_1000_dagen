@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Drenthe",
+    "population": 497743
+  },
+  {
+    "name": "Flevoland",
+    "population": 434771
+  },
+  {
+    "name": "Fryslân",
+    "population": 654019
+  },
+  {
+    "name": "Gelderland",
+    "population": 2110472
+  },
+  {
+    "name": "Groningen",
+    "population": 590170
+  },
+  {
+    "name": "Limburg",
+    "population": 1118302
+  },
+  {
+    "name": "Noord-Brabant",
+    "population": 2569048
+  },
+  {
+    "name": "Noord-Holland",
+    "population": 2909827
+  },
+  {
+    "name": "Overijssel",
+    "population": 1171910
+  },
+  {
+    "name": "Utrecht",
+    "population": 1369873
+  },
+  {
+    "name": "Zeeland",
+    "population": 386767
+  },
+  {
+    "name": "Zuid-Holland",
+    "population": 3753944
+  }
+]

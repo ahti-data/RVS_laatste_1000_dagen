@@ -22,7 +22,8 @@ packages <- c(
   "htmlwidgets",
   "DT",
   "stringr",
-  "scales"
+  "scales",
+  "sf"
 )
 
 # Identify packages that are not yet installed
@@ -1099,6 +1100,159 @@ prepare_it3_cost_agg_metric_df <- function(df, metric) {
   tibble::tibble()
 }
 
+it3_map_sheet <- "msz_prestaties"
+it3_map_name <- "vektmszvergoedbedragzvw"
+
+normalize_provincie_name <- function(x) {
+  x <- as.character(x)
+  x <- stringr::str_squish(x)
+  dplyr::recode(
+    x,
+    `Friesland` = "Fryslân",
+    `Fryslan` = "Fryslân",
+    .default = x
+  )
+}
+
+load_it3_provinces_sf <- function() {
+  geo_path <- resolve_existing_path(c(
+    "dashboard/data/geo/provinces.json",
+    "data/geo/provinces.json"
+  ))
+  if (is.na(geo_path)) {
+    log_msg("[geo] provinces.json not found")
+    return(NULL)
+  }
+  tryCatch({
+    sf::st_read(geo_path, quiet = TRUE)
+  }, error = function(e) {
+    log_msg(sprintf("[geo] Failed to load provinces: %s", e$message))
+    NULL
+  })
+}
+
+it3_map_cost_base_data <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(df)
+
+  df <- df |>
+    dplyr::filter(
+      as.character(.data$sheet) == it3_map_sheet,
+      as.character(.data$name) == it3_map_name,
+      as.character(.data$bin_size) == "1000"
+    )
+  if (nrow(df) == 0) return(df)
+
+  filter_cols <- c(it3_cost_agg_total_dims, "wlz_start_period", "used_any_acp_2years")
+  for (col in intersect(filter_cols, names(df))) {
+    df <- df |> dplyr::filter(as.character(.data[[col]]) == "all")
+  }
+
+  if ("provincie" %in% names(df)) {
+    df <- df |>
+      dplyr::filter(
+        as.character(.data$provincie) != "all",
+        !tolower(as.character(.data$provincie)) %in% c("onbekend", "na", "")
+      )
+  }
+
+  if ("t" %in% names(df) && "-1" %in% as.character(df$t)) {
+    df <- df |> dplyr::filter(as.character(.data$t) == "-1")
+  }
+
+  df
+}
+
+build_it3_cost_map_sf <- function(metric_df, provincies_sf) {
+  if (is.null(metric_df) || nrow(metric_df) == 0) return(NULL)
+  if (is.null(provincies_sf)) return(NULL)
+
+  prov_data <- metric_df |>
+    dplyr::transmute(
+      provincie = normalize_provincie_name(.data$provincie),
+      metric_value = .data$metric_value
+    ) |>
+    dplyr::distinct(.data$provincie, .keep_all = TRUE)
+
+  if (!"name" %in% names(provincies_sf)) {
+    log_msg("[geo] Province geo missing 'name' column")
+    return(NULL)
+  }
+
+  geo <- provincies_sf |>
+    dplyr::mutate(name = normalize_provincie_name(.data$name))
+
+  unmatched <- setdiff(prov_data$provincie, geo$name)
+  if (length(unmatched) > 0) {
+    log_msg(sprintf("[geo] Unmatched province names in data: %s", paste(unmatched, collapse = ", ")))
+  }
+
+  dplyr::left_join(geo, prov_data, by = c("name" = "provincie"))
+}
+
+build_it3_cost_map_plot <- function(map_sf, metric, cohort, died) {
+  metric_label <- it3_cost_metric_label(metric)
+  cohort_label <- cohort %||% "-"
+  died_label <- died %||% "-"
+
+  if (is.null(map_sf) || nrow(map_sf) == 0) {
+    return(
+      ggplot2::ggplot() +
+        ggplot2::annotate(
+          "text",
+          x = 0.5,
+          y = 0.5,
+          label = "Geen data beschikbaar voor deze selectie."
+        ) +
+        ggplot2::theme_void()
+    )
+  }
+
+  valid_vals <- map_sf$metric_value[!is.na(map_sf$metric_value)]
+  if (length(valid_vals) == 0) {
+    return(
+      ggplot2::ggplot() +
+        ggplot2::annotate(
+          "text",
+          x = 0.5,
+          y = 0.5,
+          label = "Geen data beschikbaar voor deze selectie."
+        ) +
+        ggplot2::theme_void()
+    )
+  }
+
+  max_val <- max(valid_vals, na.rm = TRUE)
+  if (!is.finite(max_val) || max_val <= 0) {
+    max_val <- 1
+  }
+
+  ggplot2::ggplot(map_sf) +
+    ggplot2::geom_sf(
+      ggplot2::aes(fill = metric_value),
+      color = "grey40",
+      linewidth = 0.3
+    ) +
+    ggplot2::scale_fill_gradient(
+      low = "#FFFFFF",
+      high = "#2C3E7A",
+      limits = c(0, max_val),
+      na.value = "grey85",
+      name = metric_label
+    ) +
+    ggplot2::labs(
+      title = sprintf("Totaal 1000 dagen (%s, %s)", metric_label, cohort_label),
+      subtitle = sprintf("Populatie: %s | MSZ vergoed bedrag ZVW", died_label)
+    ) +
+    ggplot2::theme_minimal(base_size = 13) +
+    ggplot2::theme(
+      panel.grid = ggplot2::element_line(linetype = "dashed", color = "grey85"),
+      legend.position = "right",
+      legend.key.height = ggplot2::unit(2, "cm"),
+      plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
+      plot.subtitle = ggplot2::element_text(hjust = 0.5)
+    )
+}
+
 regression_sig_label <- function(p) {
   dplyr::case_when(
     is.na(p) ~ "Niet significant",
@@ -1232,7 +1386,8 @@ if (getRversion() >= "2.15.1") {
     "q05_per_persoon", "q25_per_persoon", "mediaan_per_persoon",
     "q75_per_persoon", "q95_per_persoon", "bin_size", "doodsoorzaak",
     "t_numeric", "value_butterfly", "group", "interventie", "interventie_category",
-    "wlz_start_period", "provincie", "used_any_acp_2years", "used_cohorts", "sheet"
+    "wlz_start_period", "provincie", "used_any_acp_2years", "used_cohorts", "sheet",
+    "metric_value", "name"
   ))
 }
 
@@ -1246,6 +1401,11 @@ unlink(log_file)
 log_msg <- function(msg) {
   cat(paste0("[", Sys.time(), "] ", msg, "\n"), file = log_file, append = TRUE)
   cat(paste0("[", Sys.time(), "] ", msg, "\n"))
+}
+
+it3_provinces_sf <- load_it3_provinces_sf()
+if (!is.null(it3_provinces_sf)) {
+  log_msg(sprintf("[geo] Loaded %d province polygons", nrow(it3_provinces_sf)))
 }
 
 read_all_data <- function(path = data_path) {
@@ -1688,6 +1848,29 @@ ui <- navbarPage(
             plotlyOutput("it3_plot_cost_agg", height = "720px"),
             br(),
             downloadButton("it3_dl_cost_agg", "Gegevens downloaden")
+          )
+        )
+      ),
+      tabPanel(
+        "Kostenkaart",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_map_cohort", "Cohort", choices = NULL),
+            selectInput("it3_map_died", "Populatie (died)", choices = NULL),
+            radioButtons(
+              "it3_map_metric",
+              "Kies variabele (type)",
+              choices = c("Laden..." = "__loading__"),
+              selected = "__loading__"
+            ),
+            helpText("MSZ vergoed bedrag ZVW per provincie, totaal 1000 dagen.")
+          ),
+          mainPanel(
+            width = 9,
+            plotOutput("it3_plot_cost_map", height = "720px"),
+            br(),
+            downloadButton("it3_dl_cost_map", "Kaart downloaden (PNG)")
           )
         )
       ),
@@ -2222,6 +2405,131 @@ server <- function(input, output, session) {
     },
     content = function(file) {
       writexl::write_xlsx(it3_cost_agg_filtered(), file)
+    }
+  )
+
+  observe({
+    df <- it3_map_cost_base_data(it3_cost_agg_raw)
+    if (is.null(df) || nrow(df) == 0) return()
+
+    pick_choice <- function(choices, current, preferred = NULL) {
+      if (!is.null(current) && current %in% choices) return(current)
+      if (!is.null(preferred) && preferred %in% choices) return(preferred)
+      choices[[1]]
+    }
+
+    if ("cohort" %in% names(df)) {
+      cohort_vals <- ordered_values(df$cohort)
+      selected_cohort <- pick_choice(cohort_vals, input$it3_map_cohort, preferred = "2023")
+      if (!is.null(selected_cohort)) {
+        updateSelectInput(session, "it3_map_cohort", choices = cohort_vals, selected = selected_cohort)
+      }
+    }
+    if ("died" %in% names(df)) {
+      died_vals <- ordered_values(df$died)
+      selected_died <- pick_choice(died_vals, input$it3_map_died)
+      if (!is.null(selected_died)) {
+        updateSelectInput(session, "it3_map_died", choices = died_vals, selected = selected_died)
+      }
+    }
+  })
+
+  observe({
+    df <- it3_map_cost_base_data(it3_cost_agg_raw)
+    if (is.null(df) || nrow(df) == 0 || !"type" %in% names(df)) return()
+
+    if ("cohort" %in% names(df) && !is.null(input$it3_map_cohort) && nzchar(input$it3_map_cohort)) {
+      df <- df |> dplyr::filter(as.character(.data$cohort) == as.character(input$it3_map_cohort))
+    }
+    if ("died" %in% names(df) && !is.null(input$it3_map_died) && nzchar(input$it3_map_died)) {
+      df <- df |> dplyr::filter(as.character(.data$died) == as.character(input$it3_map_died))
+    }
+    if (nrow(df) == 0) return()
+
+    choices <- it3_cost_agg_metric_choices(df, it3_map_sheet)
+    if (length(choices) == 0) return()
+
+    type_vals <- sort(unique(as.character(df$type)))
+    type_vals <- type_vals[!is.na(type_vals) & nzchar(type_vals)]
+
+    selected <- input$it3_map_metric
+    if (is.null(selected) || identical(selected, "__loading__") || !selected %in% unname(choices)) {
+      selected <- dplyr::case_when(
+        "kosten_per_persoon" %in% unname(choices) ~ "kosten_per_persoon",
+        "n_totaal_gebruikers" %in% type_vals ~ "n_totaal_gebruikers",
+        "sum_totaal_groep" %in% type_vals ~ "sum_totaal_groep",
+        TRUE ~ unname(choices)[[1]]
+      )
+    }
+
+    updateRadioButtons(session, "it3_map_metric", choices = choices, selected = selected)
+  })
+
+  it3_map_cost_filtered <- reactive({
+    df <- it3_map_cost_base_data(it3_cost_agg_raw)
+    req(!is.null(df), nrow(df) > 0)
+
+    if ("cohort" %in% names(df) && !is.null(input$it3_map_cohort) && nzchar(input$it3_map_cohort)) {
+      df <- df |> dplyr::filter(as.character(.data$cohort) == as.character(input$it3_map_cohort))
+    }
+    if ("died" %in% names(df) && !is.null(input$it3_map_died) && nzchar(input$it3_map_died)) {
+      df <- df |> dplyr::filter(as.character(.data$died) == as.character(input$it3_map_died))
+    }
+
+    metric <- input$it3_map_metric
+    req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
+
+    prepare_it3_cost_agg_metric_df(df, metric)
+  })
+
+  it3_map_cost_sf <- reactive({
+    df <- it3_map_cost_filtered()
+    build_it3_cost_map_sf(df, it3_provinces_sf)
+  })
+
+  output$it3_plot_cost_map <- renderPlot({
+    metric <- input$it3_map_metric
+    req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
+
+    build_it3_cost_map_plot(
+      it3_map_cost_sf(),
+      metric = metric,
+      cohort = input$it3_map_cohort,
+      died = input$it3_map_died
+    )
+  })
+
+  output$it3_dl_cost_map <- downloadHandler(
+    filename = function() {
+      paste0(
+        "iteratie3_kostenkaart_",
+        input$it3_map_metric %||% "metric",
+        "_",
+        input$it3_map_cohort %||% "cohort",
+        "_",
+        Sys.Date(),
+        ".png"
+      )
+    },
+    content = function(file) {
+      metric <- input$it3_map_metric
+      req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
+
+      p <- build_it3_cost_map_plot(
+        it3_map_cost_sf(),
+        metric = metric,
+        cohort = input$it3_map_cohort,
+        died = input$it3_map_died
+      )
+      ggplot2::ggsave(
+        filename = file,
+        plot = p,
+        device = "png",
+        width = 12,
+        height = 9,
+        dpi = 300,
+        bg = "white"
+      )
     }
   )
 
