@@ -1,1 +1,1 @@
-[shiny.error] cannot coerce type 'closure' to vector of type 'character'
+[shiny.error] object 'split_value' not found

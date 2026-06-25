@@ -99,7 +99,10 @@ pretty_sheet <- function(x) {
     msz_activit_diag = "MSZ activiteit diagnostiek",
     msz_addon_oncology_total_cancer = "MSZ add-on oncologie totaal, overleden aan kanker",
     msz_addon_oncology_cancer = "MSZ add-on oncologiegroepen, overleden aan kanker",
+    msz_addon_oncology_total = "MSZ add-on oncologie totaal",
     msz_addon = "MSZ add-ons",
+    huisartsdecltab = "Huisarts declaraties",
+    msz_prestatie_diagnostiek = "MSZ prestatie diagnostiek",
     .default = pretty_default_iteration2(x)
   )
 }
@@ -348,7 +351,10 @@ pretty_split_name <- function(x) {
     stedgem = "Stedelijkheid",
     wlz_start_period = "WLZ-startperiode",
     provincie = "Provincie",
+    burgstaat = "Burgerlijke staat",
+    cohort = "Cohort",
     used_any_acp_2years = "ACP-gebruik (2 jaar)",
+    huisarts_consults_cat = "Huisartsconsulten",
     doodsoorzaak = "Doodsoorzaak",
     .default = pretty_default_iteration2(x)
   )
@@ -879,6 +885,13 @@ pick_first_existing <- function(paths) {
   if (length(hit) == 0) NA_character_ else hit[[1]]
 }
 
+resolve_iteration3_subfile <- function(subdir, filename) {
+  pick_first_existing(c(
+    file.path("dashboard/data/data_iteration_3", subdir, filename),
+    file.path("data/data_iteration_3", subdir, filename)
+  ))
+}
+
 resolve_iteration3_file <- function(pattern, prefer_basename = NULL) {
   dirs <- c(
     "dashboard/data/data_iteration_3",
@@ -926,17 +939,103 @@ read_iteration3_xlsx <- function(path) {
       "n_totaal_gebruikers_In_leven",
       "n_totaal_activiteiten_In_leven",
       "n_totaal_gebruikers_1000d",
-      "n_totaal_activiteiten_1000d"
+      "n_totaal_activiteiten_1000d",
+      "n_totaal_declaraties",
+      "n_totaal_declaraties_30d",
+      "n_totaal_declaraties_Overleden",
+      "n_totaal_declaraties_In_leven",
+      "n_totaal_declaraties_1000d",
+      "age_acp_user",
+      "n_users_acp_consults_2years",
+      "n_population",
+      "mean_costs_all",
+      "mean_costs_users",
+      "median_costs_all",
+      "median_costs_users"
     ),
     names(df)
   )
   for (col in num_cols) df[[col]] <- numericize(df[[col]])
 
-  for (col in intersect(c("prestatie_type", "died", "cohort", "bin_size", "zpk_category"), names(df))) {
+  for (col in intersect(
+    c(
+      "prestatie_type", "died", "cohort", "bin_size", "zpk_category",
+      "geslacht", "split_by", "group", "cost_type", "ranked_by", "cost_bin"
+    ),
+    names(df)
+  )) {
     df[[col]] <- as.character(df[[col]])
   }
 
   df
+}
+
+it3_zvwk_ref_line_choices <- c(
+  "Gemiddelde kosten (alle)" = "mean_costs_all",
+  "Gemiddelde kosten (gebruikers)" = "mean_costs_users",
+  "Mediaan kosten (alle)" = "median_costs_all",
+  "Mediaan kosten (gebruikers)" = "median_costs_users"
+)
+
+parse_zvwk_cost_bin_bounds <- function(label) {
+  label <- as.character(label)
+  if (!nzchar(label)) return(c(lower = NA_real_, upper = NA_real_))
+
+  if (grepl(" - ", label, fixed = TRUE)) {
+    parts <- strsplit(label, " - ", fixed = TRUE)[[1]]
+    lower <- suppressWarnings(as.numeric(parts[[1]]))
+    upper_raw <- parts[[2]]
+    upper <- if (toupper(upper_raw) %in% c("INF", "INFINITY")) {
+      Inf
+    } else {
+      suppressWarnings(as.numeric(upper_raw))
+    }
+    return(c(lower = lower, upper = upper))
+  }
+
+  val <- suppressWarnings(as.numeric(label))
+  if (!is.na(val)) return(c(lower = val, upper = val))
+  c(lower = NA_real_, upper = NA_real_)
+}
+
+it3_zvwk_bin_for_value <- function(bin_labels, value) {
+  value <- suppressWarnings(as.numeric(value))
+  if (is.na(value) || length(bin_labels) == 0) return(NA_character_)
+
+  for (lbl in bin_labels) {
+    bounds <- parse_zvwk_cost_bin_bounds(lbl)
+    lower <- bounds[["lower"]]
+    upper <- bounds[["upper"]]
+    if (is.na(lower)) next
+
+    if (is.infinite(upper)) {
+      if (value >= lower) return(lbl)
+    } else if (identical(lbl, "0") || (upper == lower && !is.na(upper))) {
+      if (value == lower) return(lbl)
+    } else if (!is.na(upper) && value >= lower && value < upper) {
+      return(lbl)
+    }
+  }
+
+  NA_character_
+}
+
+prepare_it3_zvwk_hist_df <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(tibble::tibble())
+  if (!all(c("cost_bin", "n_population") %in% names(df))) return(tibble::tibble())
+
+  df <- df |>
+    dplyr::mutate(
+      cost_bin = as.character(cost_bin),
+      pop_num = numericize(n_population)
+    ) |>
+    dplyr::filter(!is.na(cost_bin), nzchar(cost_bin), cost_bin != "NA", !is.na(pop_num))
+
+  if (nrow(df) == 0) return(tibble::tibble())
+
+  bin_levels <- unique(df$cost_bin)
+  df |>
+    dplyr::mutate(cost_bin_label = factor(cost_bin, levels = bin_levels))
 }
 
 it3_cost_agg_total_dims <- c(
@@ -950,10 +1049,74 @@ it3_cost_agg_total_dims <- c(
   "stedgem"
 )
 
+it3_cost_agg_core_cols <- c(
+  "bin_size", "t", "cohort", "died", "n_totaal", "variable", "value", "type", "name", "sheet"
+)
+
+it3_cost_agg_dim_cols <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(character())
+  cols <- setdiff(names(df), it3_cost_agg_core_cols)
+  cols <- cols[vapply(cols, function(col) {
+    vals <- as.character(df[[col]])
+    any(!is.na(vals) & nzchar(vals))
+  }, logical(1))]
+  sort(cols)
+}
+
+it3_cost_agg_unique_dim_values <- function(values) {
+  vals <- unique(as.character(values))
+  vals[!is.na(vals) & nzchar(vals)]
+}
+
+it3_cost_agg_varied_dim_cols <- function(df) {
+  cols <- it3_cost_agg_dim_cols(df)
+  cols[vapply(cols, function(col) {
+    length(it3_cost_agg_unique_dim_values(df[[col]])) > 1
+  }, logical(1))]
+}
+
+it3_cost_dim_choice_values <- function(col, values) {
+  vals <- it3_cost_agg_unique_dim_values(values)
+  if (length(vals) <= 1) return(vals)
+
+  if ("all" %in% vals) {
+    rest <- setdiff(vals, "all")
+    if (identical(col, "age_cat") || identical(col, "inkomen_klasse")) {
+      rest <- ordered_split_values(col, rest)
+    } else {
+      rest <- sort(rest)
+    }
+    return(c("all", rest))
+  }
+
+  if (identical(col, "age_cat") || identical(col, "inkomen_klasse")) {
+    return(ordered_split_values(col, vals))
+  }
+
+  ordered_values(vals)
+}
+
+it3_cost_dim_input_id <- function(col) {
+  paste0("it3_cost_dim_", col)
+}
+
 filter_iteration3_cost_agg_totals <- function(df) {
   if (is.null(df) || nrow(df) == 0) return(df)
   for (col in intersect(it3_cost_agg_total_dims, names(df))) {
     df <- df |> dplyr::filter(as.character(.data[[col]]) == "all")
+  }
+  df
+}
+
+normalize_iteration3_cost_agg_sheet <- function(df) {
+  if (is.null(df) || nrow(df) == 0) return(df)
+  num_cols <- c("t", "n_totaal", "value")
+  for (col in names(df)) {
+    if (col %in% num_cols) {
+      df[[col]] <- numericize(df[[col]])
+    } else {
+      df[[col]] <- as.character(df[[col]])
+    }
   }
   df
 }
@@ -1324,30 +1487,17 @@ read_iteration3_cost_agg <- function(path) {
   }
 
   sheets <- readxl::excel_sheets(path)
-
-  df <- purrr::map_dfr(
+  purrr::map(
     sheets,
     function(sh) {
       tmp <- readxl::read_excel(path, sheet = sh, .name_repair = "unique")
       tmp <- dplyr::as_tibble(tmp)
+      tmp <- normalize_iteration3_cost_agg_sheet(tmp)
       tmp$sheet <- sh
       tmp
     }
-  )
-
-  num_cols <- intersect(
-    c(
-      "t", "n_totaal", "value",
-      "bin_size", "cohort"
-    ),
-    names(df)
-  )
-
-  for (col in num_cols) {
-    df[[col]] <- numericize(df[[col]])
-  }
-
-  filter_iteration3_cost_agg_totals(df)
+  ) |>
+    dplyr::bind_rows()
 }
 
 format_regression_dependent_var <- function(x) {
@@ -1412,18 +1562,24 @@ read_iteration3_regression <- function(path) {
   out
 }
 
-data_path_iteration3_cost_agg <- resolve_iteration3_file("*cost_aggregations.xlsx")
-data_path_iteration3_zpk <- resolve_iteration3_file(
-  "*zpk_categorieen_tellingen*.xlsx",
-  prefer_basename = "zpk_categorieen_tellingen.xlsx"
-)
-data_path_iteration3_top50 <- resolve_iteration3_file("*top50_activiteiten*.xlsx")
-data_path_iteration3_regression <- resolve_iteration3_file("*regression_results.xlsx")
+data_path_iteration3_zpk <- resolve_iteration3_subfile("iteration_3c", "zpk_categorieen_tellingen.xlsx")
+data_path_iteration3_top50 <- resolve_iteration3_subfile("iteration_3c", "top50_activiteiten.xlsx")
 
-it3_cost_agg_raw <- read_iteration3_cost_agg(data_path_iteration3_cost_agg)
+it3_cost_agg_by_iter <- list(
+  "3c" = read_iteration3_cost_agg(resolve_iteration3_subfile("iteration_3c", "cost_aggregations.xlsx")),
+  "3d" = read_iteration3_cost_agg(resolve_iteration3_subfile("iteration_3d", "cost_aggregations.xlsx"))
+)
+it3_regression_by_iter <- list(
+  "3c" = read_iteration3_regression(resolve_iteration3_subfile("iteration_3c", "regression_results.xlsx")),
+  "3d" = read_iteration3_regression(resolve_iteration3_subfile("iteration_3d", "regression_results.xlsx"))
+)
+it3_cost_agg_raw_3c <- it3_cost_agg_by_iter[["3c"]]
 it3_zpk_raw <- read_iteration3_xlsx(data_path_iteration3_zpk)
 it3_top50_raw <- read_iteration3_xlsx(data_path_iteration3_top50)
-it3_regression_raw <- read_iteration3_regression(data_path_iteration3_regression)
+it3_top50_prest_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "top50_prestaties.xlsx"))
+it3_acp_ages_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "acp_average_ages.xlsx"))
+it3_acp_pop_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "ACP_population_descriptives.xlsx"))
+it3_zvwk_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "zvwk_distributions.xlsx"))
 
 
 # ===== VARIABLE DECLARATIONS & UTILITIES =====
@@ -1505,6 +1661,22 @@ if (!is.na(data_path_iteration3_zpk) && nzchar(data_path_iteration3_zpk)) {
     data_path_iteration3_zpk,
     if (is.null(it3_zpk_raw)) 0L else nrow(it3_zpk_raw),
     if (is.na(prest_col)) "MISSING" else prest_col
+  ))
+}
+
+for (iter in names(it3_cost_agg_by_iter)) {
+  df_iter <- it3_cost_agg_by_iter[[iter]]
+  sheet_vals <- if (nrow(df_iter) > 0 && "sheet" %in% names(df_iter)) {
+    sort(unique(as.character(df_iter$sheet)))
+  } else {
+    character(0)
+  }
+  log_msg(sprintf(
+    "[startup] Iteratie 3 cost_agg_%s: %d rows, %d sheets (%s)",
+    iter,
+    nrow(df_iter),
+    length(sheet_vals),
+    if (length(sheet_vals) > 0) paste(sheet_vals, collapse = ", ") else "none"
   ))
 }
 
@@ -1859,31 +2031,60 @@ ui <- navbarPage(
         )
       ),
       tabPanel(
+        "Top 50 prestaties",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_top50_prest_ranked_by", "Ranked by", choices = NULL),
+            radioButtons(
+              "it3_top50_prest_metric",
+              "Kies variabele",
+              choices = c(
+                "Aantal gebruikers" = "n_totaal_gebruikers",
+                "Aantal declaraties" = "n_totaal_declaraties",
+                "Som totaal groep" = "sum_totaal_groep"
+              ),
+              selected = "n_totaal_gebruikers"
+            ),
+            selectInput(
+              "it3_top50_prest_compare_group",
+              "Comparison group",
+              choices = c("bin size", "died"),
+              selected = "died"
+            )
+          ),
+          mainPanel(
+            width = 9,
+            h4(textOutput("it3_top50_prest_title")),
+            fluidRow(
+              column(9, plotlyOutput("it3_plot_top50_prest_main", height = "820px")),
+              column(3, plotlyOutput("it3_plot_top50_prest_compare", height = "820px"))
+            ),
+            br(),
+            downloadButton("it3_dl_top50_prest", "Gegevens downloaden")
+          )
+        )
+      ),
+      tabPanel(
         "Kosten over Tijd",
         sidebarLayout(
           sidebarPanel(
             width = 3,
+            selectInput(
+              "it3_cost_iter",
+              "Select iteration data",
+              choices = c("3c" = "3c", "3d" = "3d"),
+              selected = "3c"
+            ),
             selectInput("it3_cost_dataset", "Dataset", choices = NULL),
             uiOutput("it3_cost_name_ui"),
             hr(),
-            radioButtons(
-              "it3_cost_split_var",
-              "Verdeel naar (split variable)",
-              choices = c(
-                "Geen verdeling (all)" = "none",
-                "WLZ startperiode" = "wlz_start_period",
-                "Provincie" = "provincie",
-                "ACP gebruik (2 jaar)" = "used_any_acp_2years"
-              ),
-              selected = "none"
-            ),
+            uiOutput("it3_cost_split_var_ui"),
             hr(),
             selectInput("it3_cost_cohort", "Cohort", choices = NULL),
             uiOutput("it3_cost_died_ui"),
             selectInput("it3_cost_bin", "Bin size", choices = NULL),
-            selectInput("it3_cost_wlz_start", "WLZ startperiode (filter)", choices = NULL),
-            selectInput("it3_cost_provincie", "Provincie (filter)", choices = NULL),
-            selectInput("it3_cost_acp", "ACP gebruik 2 jaar (filter)", choices = NULL),
+            uiOutput("it3_cost_dim_filters_ui"),
             radioButtons(
               "it3_cost_metric",
               "Kies variabele",
@@ -1927,6 +2128,12 @@ ui <- navbarPage(
         sidebarLayout(
           sidebarPanel(
             width = 3,
+            selectInput(
+              "it3_reg_iter",
+              "Select iteration data",
+              choices = c("3c" = "3c", "3d" = "3d"),
+              selected = "3c"
+            ),
             selectInput("it3_reg_used_cohorts", "Gebruikte cohorten (used_cohorts)", choices = NULL),
             selectInput("it3_reg_dependent_var", "Afhankelijke variabele (dependent_var)", choices = NULL),
             helpText("Coëfficiënten met 95%-betrouwbaarheidsinterval (schatting ± 1,96 × standaardfout).")
@@ -1937,6 +2144,56 @@ ui <- navbarPage(
             uiOutput("it3_reg_plot_ui"),
             br(),
             downloadButton("it3_dl_regression", "Gegevens downloaden")
+          )
+        )
+      ),
+      tabPanel(
+        "ACP descriptives",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_acp_split_by", "Split variable", choices = NULL),
+            radioButtons(
+              "it3_acp_metric",
+              "Kies variabele",
+              choices = c(
+                "Aantal gebruikers" = "n_users",
+                "Prevalentie" = "prevalentie"
+              ),
+              selected = "n_users"
+            )
+          ),
+          mainPanel(
+            width = 9,
+            h4("Gemiddelde leeftijd ACP-gebruikers"),
+            tableOutput("it3_table_acp_ages"),
+            br(),
+            h4("ACP populatie descriptives"),
+            plotlyOutput("it3_plot_acp_pop", height = "720px"),
+            br(),
+            downloadButton("it3_dl_acp_pop", "Gegevens downloaden")
+          )
+        )
+      ),
+      tabPanel(
+        "ZVW-kosten verdeling",
+        sidebarLayout(
+          sidebarPanel(
+            width = 3,
+            selectInput("it3_zvwk_cost_type", "Cost type", choices = NULL),
+            selectInput("it3_zvwk_cohort", "Cohort", choices = NULL),
+            radioButtons(
+              "it3_zvwk_ref_line",
+              "Show average line",
+              choices = it3_zvwk_ref_line_choices,
+              selected = "mean_costs_all"
+            )
+          ),
+          mainPanel(
+            width = 9,
+            plotlyOutput("it3_plot_zvwk", height = "720px"),
+            br(),
+            downloadButton("it3_dl_zvwk", "Gegevens downloaden")
           )
         )
       )
@@ -1967,6 +2224,24 @@ server <- function(input, output, session) {
   # ==========================================
   # SERVER LOGIC: ITERATIE 3
   # ==========================================
+
+  it3_cost_agg_raw <- reactive({
+    iter <- input$it3_cost_iter %||% "3c"
+    it3_cost_agg_by_iter[[iter]] %||% tibble::tibble()
+  })
+
+  it3_cost_dataset_df <- reactive({
+    df <- it3_cost_agg_raw()
+    req(!is.null(df), nrow(df) > 0)
+    req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
+    req("sheet" %in% names(df))
+    df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
+  })
+
+  it3_regression_raw <- reactive({
+    iter <- input$it3_reg_iter %||% "3c"
+    it3_regression_by_iter[[iter]] %||% tibble::tibble()
+  })
 
   output$it3_zpk_prestatie_notice <- renderUI({
     prest_col <- it3_zpk_prestatie_colname(it3_zpk_raw)
@@ -2031,33 +2306,78 @@ server <- function(input, output, session) {
       updateSelectInput(session, "it3_top50_ranked_by", choices = ranked_vals, selected = ranked_vals[[1]])
     }
 
-    # Regressie resultaten
-    if (!is.null(it3_regression_raw) && nrow(it3_regression_raw) > 0) {
-      cohort_vals <- sort(unique(as.character(it3_regression_raw$used_cohorts)))
-      cohort_vals <- cohort_vals[!is.na(cohort_vals) & nzchar(cohort_vals)]
-      if (length(cohort_vals) > 0) {
-        updateSelectInput(session, "it3_reg_used_cohorts", choices = cohort_vals, selected = cohort_vals[[1]])
-      }
-      dep_vals <- sort(unique(as.character(it3_regression_raw$dependent_var)))
-      updateSelectInput(session, "it3_reg_dependent_var", choices = dep_vals, selected = dep_vals[[1]])
+    if (!is.null(it3_top50_prest_raw) && nrow(it3_top50_prest_raw) > 0 && "ranked_by" %in% names(it3_top50_prest_raw)) {
+      ranked_vals <- ordered_values(it3_top50_prest_raw$ranked_by)
+      updateSelectInput(session, "it3_top50_prest_ranked_by", choices = ranked_vals, selected = ranked_vals[[1]])
     }
 
-    # Kosten over Tijd
-    if (!is.null(it3_cost_agg_raw) && nrow(it3_cost_agg_raw) > 0 && "sheet" %in% names(it3_cost_agg_raw)) {
-      sheet_vals <- sort(unique(as.character(it3_cost_agg_raw$sheet)))
-      updateSelectInput(
-        session,
-        "it3_cost_dataset",
-        choices = choice_names(sheet_vals, pretty_sheet),
-        selected = if (length(sheet_vals) > 0) sheet_vals[[1]] else NULL
-      )
+    if (!is.null(it3_acp_pop_raw) && nrow(it3_acp_pop_raw) > 0 && "split_by" %in% names(it3_acp_pop_raw)) {
+      split_vals <- sort(unique(as.character(it3_acp_pop_raw$split_by)))
+      split_vals <- split_vals[!is.na(split_vals) & nzchar(split_vals)]
+      if (length(split_vals) > 0) {
+        updateSelectInput(
+          session,
+          "it3_acp_split_by",
+          choices = choice_names(split_vals, pretty_split_name),
+          selected = if ("cohort" %in% split_vals) "cohort" else split_vals[[1]]
+        )
+      }
+    }
+
+    if (!is.null(it3_zvwk_raw) && nrow(it3_zvwk_raw) > 0) {
+      if ("cost_type" %in% names(it3_zvwk_raw)) {
+        cost_vals <- ordered_values(it3_zvwk_raw$cost_type)
+        updateSelectInput(
+          session,
+          "it3_zvwk_cost_type",
+          choices = choice_names(cost_vals, pretty_metric_name),
+          selected = if ("zvwktotaal" %in% cost_vals) "zvwktotaal" else cost_vals[[1]]
+        )
+      }
+      if ("cohort" %in% names(it3_zvwk_raw)) {
+        cohort_vals <- ordered_values(it3_zvwk_raw$cohort)
+        updateSelectInput(
+          session,
+          "it3_zvwk_cohort",
+          choices = cohort_vals,
+          selected = if ("2023" %in% cohort_vals) "2023" else cohort_vals[[1]]
+        )
+      }
     }
   })
 
+  observeEvent(input$it3_reg_iter, {
+    df <- it3_regression_raw()
+    if (is.null(df) || nrow(df) == 0) return()
+
+    cohort_vals <- sort(unique(as.character(df$used_cohorts)))
+    cohort_vals <- cohort_vals[!is.na(cohort_vals) & nzchar(cohort_vals)]
+    if (length(cohort_vals) > 0) {
+      updateSelectInput(session, "it3_reg_used_cohorts", choices = cohort_vals, selected = cohort_vals[[1]])
+    }
+    dep_vals <- sort(unique(as.character(df$dependent_var)))
+    if (length(dep_vals) > 0) {
+      updateSelectInput(session, "it3_reg_dependent_var", choices = dep_vals, selected = dep_vals[[1]])
+    }
+  }, ignoreInit = FALSE)
+
+  observeEvent(input$it3_cost_iter, {
+    df <- it3_cost_agg_raw()
+    if (is.null(df) || nrow(df) == 0 || !"sheet" %in% names(df)) return()
+
+    sheet_vals <- sort(unique(as.character(df$sheet)))
+    updateSelectInput(
+      session,
+      "it3_cost_dataset",
+      choices = choice_names(sheet_vals, pretty_sheet),
+      selected = if (length(sheet_vals) > 0) sheet_vals[[1]] else NULL
+    )
+  }, ignoreInit = FALSE)
+
   observeEvent(
-    list(it3_cost_agg_raw, input$it3_cost_dataset),
+    list(input$it3_cost_iter, input$it3_cost_dataset),
     {
-      df <- it3_cost_agg_raw
+      df <- it3_cost_agg_raw()
       req(!is.null(df), nrow(df) > 0)
       req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
       req("sheet" %in% names(df))
@@ -2087,36 +2407,56 @@ server <- function(input, output, session) {
           updateSelectInput(session, "it3_cost_bin", choices = bin_vals, selected = selected_bin)
         }
       }
-
-      if ("wlz_start_period" %in% names(df)) {
-        wlz_vals <- ordered_values(df$wlz_start_period)
-        selected_wlz <- pick_choice(wlz_vals, input$it3_cost_wlz_start, preferred = "all")
-        if (!is.null(selected_wlz)) {
-          updateSelectInput(session, "it3_cost_wlz_start", choices = wlz_vals, selected = selected_wlz)
-        }
-      }
-
-      if ("provincie" %in% names(df)) {
-        prov_vals <- ordered_values(df$provincie)
-        selected_prov <- pick_choice(prov_vals, input$it3_cost_provincie, preferred = "all")
-        if (!is.null(selected_prov)) {
-          updateSelectInput(session, "it3_cost_provincie", choices = prov_vals, selected = selected_prov)
-        }
-      }
-
-      if ("used_any_acp_2years" %in% names(df)) {
-        acp_vals <- ordered_values(df$used_any_acp_2years)
-        selected_acp <- pick_choice(acp_vals, input$it3_cost_acp, preferred = "all")
-        if (!is.null(selected_acp)) {
-          updateSelectInput(session, "it3_cost_acp", choices = acp_vals, selected = selected_acp)
-        }
-      }
     },
     ignoreInit = TRUE
   )
 
+  output$it3_cost_split_var_ui <- renderUI({
+    df <- it3_cost_dataset_df()
+    req(nrow(df) > 0)
+
+    dim_cols <- it3_cost_agg_varied_dim_cols(df)
+    choices <- c(
+      "Geen verdeling (all)" = "none",
+      stats::setNames(dim_cols, vapply(dim_cols, pretty_split_name, character(1)))
+    )
+    selected <- isolate(input$it3_cost_split_var) %||% "none"
+    if (!selected %in% unname(choices)) selected <- "none"
+
+    radioButtons(
+      "it3_cost_split_var",
+      "Verdeel naar (split variable)",
+      choices = choices,
+      selected = selected
+    )
+  })
+
+  output$it3_cost_dim_filters_ui <- renderUI({
+    df <- it3_cost_dataset_df()
+    req(nrow(df) > 0)
+
+    split_var <- input$it3_cost_split_var %||% "none"
+    filter_cols <- setdiff(it3_cost_agg_varied_dim_cols(df), split_var)
+    if (length(filter_cols) == 0) return(NULL)
+
+    tagList(lapply(filter_cols, function(col) {
+      vals <- it3_cost_dim_choice_values(col, df[[col]])
+      input_id <- it3_cost_dim_input_id(col)
+      selected <- isolate(input[[input_id]])
+      if (is.null(selected) || !selected %in% vals) {
+        selected <- if ("all" %in% vals) "all" else vals[[1]]
+      }
+      selectInput(
+        input_id,
+        paste0(pretty_split_name(col), " (filter)"),
+        choices = choice_names(vals, function(x) pretty_value(col, x)),
+        selected = selected
+      )
+    }))
+  })
+
   selected_it3_cost_names <- reactive({
-    df <- it3_cost_agg_raw
+    df <- it3_cost_agg_raw()
     req(!is.null(df), nrow(df) > 0, "name" %in% names(df))
     req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
 
@@ -2145,7 +2485,7 @@ server <- function(input, output, session) {
   })
 
   output$it3_cost_name_ui <- renderUI({
-    df <- it3_cost_agg_raw
+    df <- it3_cost_agg_raw()
     req(!is.null(df), nrow(df) > 0, "name" %in% names(df))
     req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
 
@@ -2194,7 +2534,7 @@ server <- function(input, output, session) {
   })
 
   observeEvent(input$it3_cost_select_all, {
-    df <- it3_cost_agg_raw
+    df <- it3_cost_agg_raw()
     req(!is.null(df), nrow(df) > 0, "name" %in% names(df))
     req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
     name_vals <- df |>
@@ -2209,7 +2549,7 @@ server <- function(input, output, session) {
   })
 
   output$it3_cost_died_ui <- renderUI({
-    df <- it3_cost_agg_raw
+    df <- it3_cost_agg_raw()
     req(!is.null(df), nrow(df) > 0)
     req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
     df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
@@ -2258,7 +2598,7 @@ server <- function(input, output, session) {
   })
 
   it3_cost_agg_filtered <- reactive({
-    df <- it3_cost_agg_raw
+    df <- it3_cost_agg_raw()
     req(!is.null(df), nrow(df) > 0)
 
     split_var <- input$it3_cost_split_var %||% "none"
@@ -2274,36 +2614,18 @@ server <- function(input, output, session) {
     }
 
     # Apply demographic filters / split handling
-    if ("wlz_start_period" %in% names(df)) {
-      if (!identical(split_var, "wlz_start_period")) {
-        sel <- input$it3_cost_wlz_start
+    dim_cols <- it3_cost_agg_dim_cols(df)
+    varied_cols <- it3_cost_agg_varied_dim_cols(df)
+    for (col in dim_cols) {
+      if (identical(split_var, col)) {
+        df <- df |> dplyr::filter(as.character(.data[[col]]) != "all")
+      } else if (col %in% varied_cols) {
+        sel <- input[[it3_cost_dim_input_id(col)]]
         if (!is.null(sel) && nzchar(sel)) {
-          df <- df |> dplyr::filter(as.character(wlz_start_period) == as.character(sel))
+          df <- df |> dplyr::filter(as.character(.data[[col]]) == as.character(sel))
         }
-      } else {
-        df <- df |> dplyr::filter(as.character(wlz_start_period) != "all")
-      }
-    }
-
-    if ("provincie" %in% names(df)) {
-      if (!identical(split_var, "provincie")) {
-        sel <- input$it3_cost_provincie
-        if (!is.null(sel) && nzchar(sel)) {
-          df <- df |> dplyr::filter(as.character(provincie) == as.character(sel))
-        }
-      } else {
-        df <- df |> dplyr::filter(as.character(provincie) != "all")
-      }
-    }
-
-    if ("used_any_acp_2years" %in% names(df)) {
-      if (!identical(split_var, "used_any_acp_2years")) {
-        sel <- input$it3_cost_acp
-        if (!is.null(sel) && nzchar(sel)) {
-          df <- df |> dplyr::filter(as.character(used_any_acp_2years) == as.character(sel))
-        }
-      } else {
-        df <- df |> dplyr::filter(as.character(used_any_acp_2years) != "all")
+      } else if ("all" %in% as.character(df[[col]])) {
+        df <- df |> dplyr::filter(as.character(.data[[col]]) == "all")
       }
     }
 
@@ -2538,7 +2860,7 @@ server <- function(input, output, session) {
   )
 
   observe({
-    df <- it3_map_cost_base_data(it3_cost_agg_raw)
+    df <- it3_map_cost_base_data(it3_cost_agg_raw_3c)
     if (is.null(df) || nrow(df) == 0) return()
 
     pick_choice <- function(choices, current, preferred = NULL) {
@@ -2564,7 +2886,7 @@ server <- function(input, output, session) {
   })
 
   observe({
-    df <- it3_map_cost_base_data(it3_cost_agg_raw)
+    df <- it3_map_cost_base_data(it3_cost_agg_raw_3c)
     if (is.null(df) || nrow(df) == 0 || !"type" %in% names(df)) return()
 
     if ("cohort" %in% names(df) && !is.null(input$it3_map_cohort) && nzchar(input$it3_map_cohort)) {
@@ -2595,7 +2917,7 @@ server <- function(input, output, session) {
   })
 
   it3_map_cost_filtered <- reactive({
-    df <- it3_map_cost_base_data(it3_cost_agg_raw)
+    df <- it3_map_cost_base_data(it3_cost_agg_raw_3c)
     req(!is.null(df), nrow(df) > 0)
 
     if ("cohort" %in% names(df) && !is.null(input$it3_map_cohort) && nzchar(input$it3_map_cohort)) {
@@ -2769,9 +3091,62 @@ server <- function(input, output, session) {
     paste0("Top 50 ", rb, " compared to ", group, ": ", opposite)
   })
 
-  it3_top50_plot_df <- function(df, metric_col, label_prefix = "", label_levels = NULL) {
+  it3_top50_item_label <- function(df, desc_col, code_col) {
+    desc <- if (desc_col %in% names(df)) as.character(df[[desc_col]]) else rep("", nrow(df))
+    code <- if (code_col %in% names(df)) as.character(df[[code_col]]) else rep("", nrow(df))
+    lbl <- ifelse(!is.na(desc) & nzchar(desc), desc, code)
+    lbl[is.na(lbl)] <- ""
+    lbl
+  }
+
+  it3_top50_label_levels_from_df <- function(df, desc_col, code_col) {
+    df_lbl <- df |>
+      dplyr::mutate(
+        lbl = stringr::str_trunc(it3_top50_item_label(df, desc_col, code_col), 70),
+        rank_val = if ("ranking" %in% names(df)) as.character(ranking) else as.character(dplyr::row_number())
+      )
+    if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
+    lbl_vec <- df_lbl |> dplyr::pull(lbl)
+    rank_vec <- df_lbl |> dplyr::pull(rank_val)
+    dup <- duplicated(lbl_vec) | duplicated(lbl_vec, fromLast = TRUE)
+    if (any(dup, na.rm = TRUE)) lbl_vec[dup] <- paste0(lbl_vec[dup], " (#", rank_vec[dup], ")")
+    rev(unique(lbl_vec))
+  }
+
+  it3_top50_compare_suffix_for <- function(rb, group) {
+    if (identical(group, "died")) {
+      if (stringr::str_detect(rb, "_In_leven")) return("_Overleden")
+      if (stringr::str_detect(rb, "_Overleden")) return("_In_leven")
+      return(NA_character_)
+    }
+    if (stringr::str_detect(rb, "_1000d")) return("_30d")
+    if (stringr::str_detect(rb, "_30d")) return("_1000d")
+    NA_character_
+  }
+
+  it3_top50_opposite_label_for <- function(rb, group) {
+    if (identical(group, "died")) {
+      if (stringr::str_detect(rb, "_In_leven")) return("Overleden")
+      if (stringr::str_detect(rb, "_Overleden")) return("In leven")
+      return("onbekend")
+    }
+    if (stringr::str_detect(rb, "_1000d")) return("30d")
+    if (stringr::str_detect(rb, "_30d")) return("1000d")
+    "onbekend"
+  }
+
+  it3_top50_plot_df <- function(
+    df,
+    metric_col,
+    desc_col = "mszzorgactiviteitomschrijving",
+    code_col = "vektmszdeclaratiecode",
+    item_label = "Activiteit",
+    label_prefix = "",
+    label_levels = NULL,
+    include_median = FALSE
+  ) {
     req(metric_col %in% names(df))
-    lbl <- if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(df$mszzorgactiviteitomschrijving) else as.character(df$vektmszdeclaratiecode %||% "")
+    lbl <- it3_top50_item_label(df, desc_col, code_col)
     lbl_short <- stringr::str_trunc(lbl, 70)
     rank_val <- if ("ranking" %in% names(df)) as.character(df$ranking) else as.character(seq_len(nrow(df)))
     label_display <- lbl_short
@@ -2786,11 +3161,21 @@ server <- function(input, output, session) {
         label_short = label_display,
         value_num = numericize(.data[[metric_col]]),
         pop_value = numericize(.data[["n_totaal_population"]] %||% NA_real_),
+        median_value = if (include_median && "median_cost_per_declaratie" %in% names(df)) {
+          numericize(.data[["median_cost_per_declaratie"]])
+        } else {
+          NA_real_
+        },
         tooltip = paste0(
           label_prefix,
           if (nzchar(label_prefix)) "<br>" else "",
-          "Activiteit: ", label_full, "<br>",
+          item_label, ": ", lbl, "<br>",
           "Waarde: ", scales::comma(value_num, big.mark = ",", decimal.mark = "."), "<br>",
+          if (include_median && !all(is.na(median_value))) {
+            paste0("Mediaan kosten per declaratie: ", scales::comma(median_value, big.mark = ",", decimal.mark = "."), "<br>")
+          } else {
+            ""
+          },
           "n_totaal_population: ", scales::comma(pop_value, big.mark = ",", decimal.mark = ".")
         )
       )
@@ -2810,35 +3195,39 @@ server <- function(input, output, session) {
     out
   }
 
-  output$it3_plot_top50_main <- renderPlotly({
-    df <- it3_top50_filtered()
-    metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
-    df_lbl <- df |>
-      dplyr::mutate(
-        lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70),
-        rank_val = if ("ranking" %in% names(df)) as.character(ranking) else as.character(row_number())
-      )
-    if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
-    lbl_vec <- df_lbl |> dplyr::pull(lbl)
-    rank_vec <- df_lbl |> dplyr::pull(rank_val)
-    dup <- duplicated(lbl_vec) | duplicated(lbl_vec, fromLast = TRUE)
-    if (any(dup, na.rm = TRUE)) lbl_vec[dup] <- paste0(lbl_vec[dup], " (#", rank_vec[dup], ")")
-    label_levels <- unique(lbl_vec)
-    # Show rank 1 at top after coord_flip()
-    label_levels <- rev(label_levels)
-
-    df_plot <- it3_top50_plot_df(df, metric, label_prefix = "Geselecteerd (ranked_by)", label_levels = label_levels)
-    req(nrow(df_plot) > 0)
-
+  it3_top50_render_bar_plot <- function(df_plot, fill_color, hide_y_axis = FALSE) {
     p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = label_short, y = value_num, text = tooltip)) +
-      ggplot2::geom_col(fill = "#2563EB") +
+      ggplot2::geom_col(fill = fill_color) +
       ggplot2::coord_flip() +
       ggplot2::theme_minimal(base_size = 12) +
-      ggplot2::theme(panel.grid.minor = ggplot2::element_blank()) +
+      ggplot2::theme(
+        panel.grid.minor = ggplot2::element_blank(),
+        axis.text.y = if (hide_y_axis) ggplot2::element_blank() else ggplot2::element_text(),
+        axis.ticks.y = if (hide_y_axis) ggplot2::element_blank() else ggplot2::element_line()
+      ) +
       ggplot2::labs(x = NULL, y = NULL)
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
+  }
+
+  output$it3_plot_top50_main <- renderPlotly({
+    df <- it3_top50_filtered()
+    metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszzorgactiviteitomschrijving",
+      "vektmszdeclaratiecode"
+    )
+
+    df_plot <- it3_top50_plot_df(
+      df,
+      metric,
+      label_prefix = "Geselecteerd (ranked_by)",
+      label_levels = label_levels
+    )
+    req(nrow(df_plot) > 0)
+    it3_top50_render_bar_plot(df_plot, "#2563EB")
   })
 
   output$it3_plot_top50_compare <- renderPlotly({
@@ -2850,36 +3239,309 @@ server <- function(input, output, session) {
     compare_col <- paste0(metric, suffix)
     validate(need(compare_col %in% names(df), paste0("Vergelijkingskolom ontbreekt: ", compare_col)))
 
-    df_lbl <- df |>
-      dplyr::mutate(
-        lbl = stringr::str_trunc(if ("mszzorgactiviteitomschrijving" %in% names(df)) as.character(mszzorgactiviteitomschrijving) else as.character(vektmszdeclaratiecode %||% ""), 70),
-        rank_val = if ("ranking" %in% names(df)) as.character(ranking) else as.character(row_number())
-      )
-    if ("ranking" %in% names(df_lbl)) df_lbl <- df_lbl |> dplyr::arrange(ranking)
-    lbl_vec <- df_lbl |> dplyr::pull(lbl)
-    rank_vec <- df_lbl |> dplyr::pull(rank_val)
-    dup <- duplicated(lbl_vec) | duplicated(lbl_vec, fromLast = TRUE)
-    if (any(dup, na.rm = TRUE)) lbl_vec[dup] <- paste0(lbl_vec[dup], " (#", rank_vec[dup], ")")
-    label_levels <- unique(lbl_vec)
-    label_levels <- rev(label_levels)
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszzorgactiviteitomschrijving",
+      "vektmszdeclaratiecode"
+    )
 
-    df_plot <- it3_top50_plot_df(df, compare_col, label_prefix = paste0("Vergelijking: ", compare_col), label_levels = label_levels)
+    df_plot <- it3_top50_plot_df(
+      df,
+      compare_col,
+      label_prefix = paste0("Vergelijking: ", compare_col),
+      label_levels = label_levels
+    )
     req(nrow(df_plot) > 0)
+    it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE)
+  })
 
-    p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = label_short, y = value_num, text = tooltip)) +
-      ggplot2::geom_col(fill = "#10B981") +
-      ggplot2::coord_flip() +
-      ggplot2::theme_minimal(base_size = 12) +
+  it3_top50_prest_filtered <- reactive({
+    df <- it3_top50_prest_raw
+    req(!is.null(df), nrow(df) > 0, "ranked_by" %in% names(df))
+    rb <- input$it3_top50_prest_ranked_by
+    req(!is.null(rb), nzchar(rb))
+    df |> dplyr::filter(as.character(ranked_by) == as.character(rb))
+  })
+
+  it3_top50_prest_compare_suffix <- reactive({
+    it3_top50_compare_suffix_for(
+      input$it3_top50_prest_ranked_by %||% "",
+      input$it3_top50_prest_compare_group %||% "died"
+    )
+  })
+
+  output$it3_top50_prest_title <- renderText({
+    rb <- input$it3_top50_prest_ranked_by %||% "-"
+    group <- input$it3_top50_prest_compare_group %||% "-"
+    opposite <- it3_top50_opposite_label_for(rb, group)
+    paste0("Top 50 ", rb, " compared to ", group, ": ", opposite)
+  })
+
+  output$it3_plot_top50_prest_main <- renderPlotly({
+    df <- it3_top50_prest_filtered()
+    metric <- input$it3_top50_prest_metric %||% "n_totaal_gebruikers"
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszdbczorgproductomschrijving",
+      "vektmszdbczorgproduct"
+    )
+
+    df_plot <- it3_top50_plot_df(
+      df,
+      metric,
+      desc_col = "mszdbczorgproductomschrijving",
+      code_col = "vektmszdbczorgproduct",
+      item_label = "Prestatie",
+      label_prefix = "Geselecteerd (ranked_by)",
+      label_levels = label_levels,
+      include_median = TRUE
+    )
+    req(nrow(df_plot) > 0)
+    it3_top50_render_bar_plot(df_plot, "#2563EB")
+  })
+
+  output$it3_plot_top50_prest_compare <- renderPlotly({
+    df <- it3_top50_prest_filtered()
+    metric <- input$it3_top50_prest_metric %||% "n_totaal_gebruikers"
+    suffix <- it3_top50_prest_compare_suffix()
+    validate(need(!is.na(suffix) && nzchar(suffix), "Kan geen vergelijking bepalen uit ranked_by."))
+
+    compare_col <- paste0(metric, suffix)
+    validate(need(compare_col %in% names(df), paste0("Vergelijkingskolom ontbreekt: ", compare_col)))
+
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszdbczorgproductomschrijving",
+      "vektmszdbczorgproduct"
+    )
+
+    df_plot <- it3_top50_plot_df(
+      df,
+      compare_col,
+      desc_col = "mszdbczorgproductomschrijving",
+      code_col = "vektmszdbczorgproduct",
+      item_label = "Prestatie",
+      label_prefix = paste0("Vergelijking: ", compare_col),
+      label_levels = label_levels,
+      include_median = TRUE
+    )
+    req(nrow(df_plot) > 0)
+    it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE)
+  })
+
+  it3_acp_pop_filtered <- reactive({
+    df <- it3_acp_pop_raw
+    req(!is.null(df), nrow(df) > 0, "split_by" %in% names(df))
+    split_sel <- input$it3_acp_split_by
+    req(!is.null(split_sel), nzchar(split_sel))
+    df <- df |> dplyr::filter(as.character(split_by) == as.character(split_sel))
+    req(nrow(df) > 0)
+
+    metric <- input$it3_acp_metric %||% "n_users"
+    df |>
+      dplyr::mutate(
+        group_label = if (identical(split_sel, "cohort")) {
+          as.character(group)
+        } else {
+          pretty_value(split_sel, group)
+        },
+        metric_value = if (identical(metric, "prevalentie")) {
+          dplyr::if_else(
+            is.na(numericize(n_population)) | numericize(n_population) == 0,
+            NA_real_,
+            numericize(n_users_acp_consults_2years) / numericize(n_population)
+          )
+        } else {
+          numericize(n_users_acp_consults_2years)
+        },
+        died_label = population_label(died)
+      ) |>
+      dplyr::filter(!is.na(metric_value))
+  })
+
+  output$it3_table_acp_ages <- renderTable({
+    df <- it3_acp_ages_raw
+    if (is.null(df) || nrow(df) == 0) return(data.frame())
+    df |>
+      dplyr::transmute(
+        Populatie = died,
+        Geslacht = geslacht,
+        `Gemiddelde leeftijd` = round(numericize(age_acp_user), 1),
+        `N populatie` = scales::comma(numericize(n_population), big.mark = ",", decimal.mark = ".")
+      )
+  }, striped = TRUE, hover = TRUE, bordered = TRUE)
+
+  output$it3_plot_acp_pop <- renderPlotly({
+    df <- it3_acp_pop_filtered()
+    req(nrow(df) > 0)
+
+    metric <- input$it3_acp_metric %||% "n_users"
+    y_label <- if (identical(metric, "prevalentie")) "Prevalentie" else "Aantal gebruikers"
+    multiple_populations <- dplyr::n_distinct(df$died_label) > 1
+
+    df <- df |>
+      dplyr::mutate(
+        tooltip = paste0(
+          "Groep: ", group_label, "<br>",
+          "Populatie: ", died_label, "<br>",
+          "Waarde: ",
+          if (identical(metric, "prevalentie")) {
+            scales::percent(metric_value, accuracy = 0.01)
+          } else {
+            scales::comma(metric_value, big.mark = ",", decimal.mark = ".")
+          }
+        )
+      )
+
+    p <- ggplot2::ggplot(
+      df,
+      ggplot2::aes(
+        x = reorder(group_label, metric_value),
+        y = metric_value,
+        fill = died_label,
+        text = tooltip
+      )
+    ) +
+      ggplot2::geom_col(position = ggplot2::position_dodge2(width = 0.75, preserve = "single")) +
+      ggplot2::scale_fill_manual(values = population_palette) +
+      ggplot2::theme_minimal(base_size = 13) +
       ggplot2::theme(
+        legend.position = if (multiple_populations) "bottom" else "none",
         panel.grid.minor = ggplot2::element_blank(),
-        axis.text.y = ggplot2::element_blank(),
-        axis.ticks.y = ggplot2::element_blank()
+        axis.text.x = ggplot2::element_text(angle = 35, hjust = 1)
       ) +
-      ggplot2::labs(x = NULL, y = NULL)
+      ggplot2::labs(x = NULL, y = y_label, fill = NULL)
+
+    if (identical(metric, "prevalentie")) {
+      p <- p + ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 0.1))
+    }
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
+
+  output$it3_dl_acp_pop <- downloadHandler(
+    filename = function() {
+      paste0("iteratie3_acp_descriptives_", input$it3_acp_split_by %||% "split", "_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      writexl::write_xlsx(it3_acp_pop_filtered(), file)
+    }
+  )
+
+  it3_zvwk_filtered <- reactive({
+    df <- it3_zvwk_raw
+    req(!is.null(df), nrow(df) > 0)
+
+    if ("cost_type" %in% names(df) && !is.null(input$it3_zvwk_cost_type) && nzchar(input$it3_zvwk_cost_type)) {
+      df <- df |> dplyr::filter(as.character(cost_type) == as.character(input$it3_zvwk_cost_type))
+    }
+    if ("cohort" %in% names(df) && !is.null(input$it3_zvwk_cohort) && nzchar(input$it3_zvwk_cohort)) {
+      df <- df |> dplyr::filter(as.character(cohort) == as.character(input$it3_zvwk_cohort))
+    }
+    df
+  })
+
+  output$it3_plot_zvwk <- renderPlotly({
+    df <- it3_zvwk_filtered()
+    req(nrow(df) > 0, "cost_bin" %in% names(df), "n_population" %in% names(df))
+
+    ref_col <- input$it3_zvwk_ref_line %||% "mean_costs_all"
+    req(ref_col %in% names(df))
+    ref_val <- numericize(df[[ref_col]][1])
+
+    df <- prepare_it3_zvwk_hist_df(df)
+    req(nrow(df) > 0)
+
+    ref_label <- names(it3_zvwk_ref_line_choices)[match(ref_col, it3_zvwk_ref_line_choices)]
+    ref_bin <- if (!is.na(ref_val)) {
+      it3_zvwk_bin_for_value(levels(df$cost_bin_label), ref_val)
+    } else {
+      NA_character_
+    }
+
+    df <- df |>
+      dplyr::mutate(
+        tooltip = paste0(
+          "Kostenbin: ", cost_bin, "<br>",
+          "Aantal personen: ", scales::comma(pop_num, big.mark = ",", decimal.mark = "."),
+          if (!is.na(ref_val)) {
+            paste0(
+              "<br>", ref_label, ": ",
+              scales::comma(ref_val, big.mark = ",", decimal.mark = ".")
+            )
+          } else {
+            ""
+          }
+        )
+      )
+
+    p <- ggplot2::ggplot(
+      df,
+      ggplot2::aes(x = cost_bin_label, y = pop_num, text = tooltip)
+    ) +
+      ggplot2::geom_col(fill = "#2563EB", width = 0.85) +
+      ggplot2::theme_minimal(base_size = 13) +
+      ggplot2::theme(
+        panel.grid.minor = ggplot2::element_blank(),
+        axis.text.x = ggplot2::element_text(angle = 35, hjust = 1)
+      ) +
+      ggplot2::labs(
+        x = "Kosten (cost_bin)",
+        y = "Aantal personen (n_population)",
+        title = paste0(
+          "ZVW-kosten verdeling | ",
+          pretty_metric_name(input$it3_zvwk_cost_type %||% "-"), " | cohort ",
+          input$it3_zvwk_cohort %||% "-"
+        )
+      )
+
+    if (!is.na(ref_bin) && nzchar(ref_bin)) {
+      p <- p +
+        ggplot2::geom_vline(
+          xintercept = ref_bin,
+          color = "#DC2626",
+          linewidth = 1,
+          linetype = "dashed"
+        )
+    }
+
+    plotly::ggplotly(p, tooltip = "text") |>
+      plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
+  })
+
+  output$it3_dl_zvwk <- downloadHandler(
+    filename = function() {
+      paste0(
+        "iteratie3_zvwk_",
+        input$it3_zvwk_cost_type %||% "type",
+        "_",
+        input$it3_zvwk_cohort %||% "cohort",
+        "_",
+        Sys.Date(),
+        ".xlsx"
+      )
+    },
+    content = function(file) {
+      writexl::write_xlsx(it3_zvwk_filtered(), file)
+    }
+  )
+
+  output$it3_dl_top50_prest <- downloadHandler(
+    filename = function() {
+      paste0("iteratie3_top50_prestaties_", input$it3_top50_prest_metric %||% "metric", "_", Sys.Date(), ".xlsx")
+    },
+    content = function(file) {
+      df <- it3_top50_prest_filtered()
+      metric <- input$it3_top50_prest_metric %||% "n_totaal_gebruikers"
+      suffix <- it3_top50_prest_compare_suffix()
+      compare_col <- if (!is.na(suffix) && nzchar(suffix)) paste0(metric, suffix) else NA_character_
+      if (!is.na(compare_col) && compare_col %in% names(df)) {
+        df <- df |> dplyr::mutate(compare_value = .data[[compare_col]])
+      }
+      writexl::write_xlsx(df, file)
+    }
+  )
 
   output$it3_dl_zpk <- downloadHandler(
     filename = function() {
@@ -2915,7 +3577,7 @@ server <- function(input, output, session) {
   )
 
   it3_regression_filtered <- reactive({
-    df <- it3_regression_raw
+    df <- it3_regression_raw()
     req(!is.null(df), nrow(df) > 0)
     
     cohort <- input$it3_reg_used_cohorts

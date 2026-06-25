@@ -1,4 +1,4 @@
-setwd('c:\\Users\\MarcoGriepAHTI\\Git Repos\\RVS_laatste_1000_dagen\\dashboard\\data\\data_iteration_3')
+setwd('c:\\Users\\MarcoGriepAHTI\\Git Repos\\RVS_laatste_1000_dagen\\dashboard\\data\\data_iteration_3\\iteration_3c')
 library(readxl)
 library(dplyr)
 

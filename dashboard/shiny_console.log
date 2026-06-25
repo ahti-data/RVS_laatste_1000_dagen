@@ -1,6 +1,13 @@
-[2026-06-22 16:55:07.239751] [startup] Initializing data...
-[2026-06-22 16:55:09.459162] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-22 16:55:09.482476] [startup] Initialization complete: 42 base names, 9 doodsoorzaken
-[2026-06-22 16:55:13.677736] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-22 16:55:14.003136] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
-[2026-06-22 16:55:14.015133] [data_maandelijks_lijn] Post-filter: 33 rows
+[2026-06-25 16:36:02.992241] [geo] Loaded 12 province polygons
+[2026-06-25 16:36:03.005299] [startup] Initializing data...
+[2026-06-25 16:36:22.841887] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-25 16:36:22.861983] [startup] Initialization complete: 42 base names, 9 doodsoorzaken
+[2026-06-25 16:36:22.864902] [startup] Iteratie 3 ZPK: data/data_iteration_3/iteration_3c/zpk_categorieen_tellingen.xlsx (2659 rows, prestatie_col=prestatie_type)
+[2026-06-25 16:36:22.869244] [startup] Iteratie 3 cost_agg_3c: 46428 rows, 11 sheets (msz_activit_diag, msz_addon, msz_addon_oncology_cancer, msz_addon_oncology_total_cancer, msz_prestaties, msz_prestaties_corrected, msz_prestaties_diag, wlz, wlz_corrected, zvw, zvw_corrected)
+[2026-06-25 16:36:22.875331] [startup] Iteratie 3 cost_agg_3d: 76336 rows, 7 sheets (huisartsdecltab, msz_addon, msz_addon_oncology_cancer, msz_addon_oncology_total, msz_addon_oncology_total_cancer, msz_prestatie_diagnostiek, msz_prestaties)
+[2026-06-25 16:36:29.352259] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-25 16:36:30.230719] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
+[2026-06-25 16:36:30.394464] [data_maandelijks_lijn] Post-filter: 33 rows
+[2026-06-25 16:37:03.502395] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-25 16:37:07.245766] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
+[2026-06-25 16:37:07.804573] [data_maandelijks_lijn] Post-filter: 33 rows
