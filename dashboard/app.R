@@ -56,10 +56,41 @@ flush.console()
   if (is.null(x) || length(x) == 0 || all(is.na(x))) y else x
 }
 
+detect_app_root <- function() {
+  env <- Sys.getenv("RVS_APP_ROOT", unset = Sys.getenv("SHINY_APP_DIR", unset = NA_character_))
+  if (!is.na(env) && nzchar(env) && file.exists(file.path(env, "app.R"))) {
+    return(normalizePath(env, winslash = "/", mustWork = FALSE))
+  }
+
+  wd <- normalizePath(getwd(), winslash = "/", mustWork = FALSE)
+  for (root in unique(c(wd, file.path(wd, "dashboard")))) {
+    if (file.exists(file.path(root, "app.R")) && dir.exists(file.path(root, "data"))) {
+      return(normalizePath(root, winslash = "/", mustWork = FALSE))
+    }
+  }
+
+  wd
+}
+
+APP_ROOT <- detect_app_root()
+cat(sprintf("[startup] APP_ROOT=%s, getwd()=%s\n", APP_ROOT, normalizePath(getwd(), winslash = "/", mustWork = FALSE)))
+flush.console()
 
 resolve_existing_path <- function(candidates) {
-  hit <- candidates[file.exists(candidates)]
-  if (length(hit) == 0) NA_character_ else hit[[1]]
+  expand_path <- function(path) {
+    if (is.na(path) || !nzchar(path)) return(character(0))
+    if (grepl("^(/|[A-Za-z]:)", path)) return(path)
+    unique(c(
+      path,
+      file.path(APP_ROOT, path),
+      file.path(getwd(), path)
+    ))
+  }
+
+  expanded <- unique(unlist(lapply(candidates, expand_path), use.names = FALSE))
+  hit <- expanded[file.exists(expanded)]
+  if (length(hit) == 0) return(NA_character_)
+  normalizePath(hit[[1]], winslash = "/", mustWork = FALSE)
 }
 
 demographic_cols_iteration2 <- c(
@@ -738,8 +769,8 @@ build_agg_version_annotations <- function(df, view) {
 
 # Load Iteratie 2 workbook metadata at startup (UI needs aggregate_sheets before server runs).
 data_path_iteration2 <- resolve_existing_path(c(
-  "dashboard/data/data_iteration_2/output.xlsx",
   "data/data_iteration_2/output.xlsx",
+  "dashboard/data/data_iteration_2/output.xlsx",
   "output.xlsx",
   "data/output.xlsx"
 ))
@@ -881,30 +912,27 @@ iteration2_panels <- function() {
 #
 
 pick_first_existing <- function(paths) {
-  hit <- paths[file.exists(paths)]
-  if (length(hit) == 0) NA_character_ else hit[[1]]
+  resolve_existing_path(paths)
 }
 
 resolve_iteration3_subfile <- function(subdir, filename) {
-  pick_first_existing(c(
-    file.path("dashboard/data/data_iteration_3", subdir, filename),
-    file.path("data/data_iteration_3", subdir, filename)
+  resolve_existing_path(c(
+    file.path("data", "data_iteration_3", subdir, filename),
+    file.path("dashboard", "data", "data_iteration_3", subdir, filename),
+    file.path("data", "data_iteration_3", filename),
+    file.path("dashboard", "data", "data_iteration_3", filename)
   ))
 }
 
 resolve_iteration3_file <- function(pattern, prefer_basename = NULL) {
-  dirs <- c(
-    "dashboard/data/data_iteration_3",
-    "data/data_iteration_3"
-  )
-  dirs <- dirs[dir.exists(dirs)]
-  candidates <- character(0)
-  for (d in dirs) {
-    globs <- Sys.glob(file.path(d, pattern))
-    globs <- globs[!grepl("^~\\$", basename(globs))] # ignore Excel lock files
-    candidates <- c(candidates, globs)
-  }
-  candidates <- unique(candidates)
+  dirs <- resolve_existing_path(c(
+    file.path("data", "data_iteration_3"),
+    file.path("dashboard", "data", "data_iteration_3")
+  ))
+  if (is.na(dirs)) return(NA_character_)
+
+  candidates <- Sys.glob(file.path(dirs, pattern))
+  candidates <- candidates[!grepl("^~\\$", basename(candidates))]
   if (length(candidates) == 0) return(NA_character_)
 
   if (!is.null(prefer_basename) && nzchar(prefer_basename)) {
@@ -1291,8 +1319,8 @@ normalize_provincie_name <- function(x) {
 
 load_it3_provinces_sf <- function() {
   geo_path <- resolve_existing_path(c(
-    "dashboard/data/geo/provinces.json",
-    "data/geo/provinces.json"
+    file.path("data", "geo", "provinces.json"),
+    file.path("dashboard", "data", "geo", "provinces.json")
   ))
   if (is.na(geo_path)) {
     log_msg("[geo] provinces.json not found")
@@ -1562,26 +1590,6 @@ read_iteration3_regression <- function(path) {
   out
 }
 
-data_path_iteration3_zpk <- resolve_iteration3_subfile("iteration_3c", "zpk_categorieen_tellingen.xlsx")
-data_path_iteration3_top50 <- resolve_iteration3_subfile("iteration_3c", "top50_activiteiten.xlsx")
-
-it3_cost_agg_by_iter <- list(
-  "3c" = read_iteration3_cost_agg(resolve_iteration3_subfile("iteration_3c", "cost_aggregations.xlsx")),
-  "3d" = read_iteration3_cost_agg(resolve_iteration3_subfile("iteration_3d", "cost_aggregations.xlsx"))
-)
-it3_regression_by_iter <- list(
-  "3c" = read_iteration3_regression(resolve_iteration3_subfile("iteration_3c", "regression_results.xlsx")),
-  "3d" = read_iteration3_regression(resolve_iteration3_subfile("iteration_3d", "regression_results.xlsx"))
-)
-it3_cost_agg_raw_3c <- it3_cost_agg_by_iter[["3c"]]
-it3_zpk_raw <- read_iteration3_xlsx(data_path_iteration3_zpk)
-it3_top50_raw <- read_iteration3_xlsx(data_path_iteration3_top50)
-it3_top50_prest_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "top50_prestaties.xlsx"))
-it3_acp_ages_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "acp_average_ages.xlsx"))
-it3_acp_pop_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "ACP_population_descriptives.xlsx"))
-it3_zvwk_raw <- read_iteration3_xlsx(resolve_iteration3_subfile("iteration_3d", "zvwk_distributions.xlsx"))
-
-
 # ===== VARIABLE DECLARATIONS & UTILITIES =====
 
 if (getRversion() >= "2.15.1") {
@@ -1596,8 +1604,8 @@ if (getRversion() >= "2.15.1") {
 }
 
 data_path <- resolve_existing_path(c(
-  "dashboard/data/data_iteration_1/all_output.xlsx",
-  "data/data_iteration_1/all_output.xlsx"
+  "data/data_iteration_1/all_output.xlsx",
+  "dashboard/data/data_iteration_1/all_output.xlsx"
 ))
 log_file <- "shiny_console.log"
 unlink(log_file)
@@ -1606,6 +1614,96 @@ log_msg <- function(msg) {
   cat(paste0("[", Sys.time(), "] ", msg, "\n"), file = log_file, append = TRUE)
   cat(paste0("[", Sys.time(), "] ", msg, "\n"))
 }
+
+safe_read_iteration3_xlsx <- function(path, label = "iter3_xlsx") {
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+    log_msg(sprintf("[iter3] %s: bestand niet gevonden (%s)", label, path %||% "geen pad"))
+    return(tibble::tibble())
+  }
+  tryCatch({
+    df <- read_iteration3_xlsx(path)
+    log_msg(sprintf("[iter3] %s: %d rijen geladen uit %s", label, nrow(df), path))
+    df
+  }, error = function(e) {
+    log_msg(sprintf("[iter3] %s: laden mislukt (%s): %s", label, path, e$message))
+    tibble::tibble()
+  })
+}
+
+safe_read_iteration3_cost_agg <- function(path, label) {
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+    log_msg(sprintf("[iter3] %s: bestand niet gevonden (%s)", label, path %||% "geen pad"))
+    return(tibble::tibble())
+  }
+  tryCatch({
+    df <- read_iteration3_cost_agg(path)
+    log_msg(sprintf("[iter3] %s: %d rijen geladen uit %s", label, nrow(df), path))
+    df
+  }, error = function(e) {
+    log_msg(sprintf("[iter3] %s: laden mislukt (%s): %s", label, path, e$message))
+    tibble::tibble()
+  })
+}
+
+safe_read_iteration3_regression <- function(path, label) {
+  if (is.na(path) || !nzchar(path) || !file.exists(path)) {
+    log_msg(sprintf("[iter3] %s: bestand niet gevonden (%s)", label, path %||% "geen pad"))
+    return(tibble::tibble())
+  }
+  tryCatch({
+    df <- read_iteration3_regression(path)
+    log_msg(sprintf("[iter3] %s: %d rijen geladen uit %s", label, nrow(df), path))
+    df
+  }, error = function(e) {
+    log_msg(sprintf("[iter3] %s: laden mislukt (%s): %s", label, path, e$message))
+    tibble::tibble()
+  })
+}
+
+data_path_iteration3_zpk <- resolve_iteration3_subfile("iteration_3c", "zpk_categorieen_tellingen.xlsx")
+data_path_iteration3_top50 <- resolve_iteration3_subfile("iteration_3c", "top50_activiteiten.xlsx")
+
+it3_cost_agg_by_iter <- list(
+  "3c" = safe_read_iteration3_cost_agg(
+    resolve_iteration3_subfile("iteration_3c", "cost_aggregations.xlsx"),
+    "cost_agg_3c"
+  ),
+  "3d" = safe_read_iteration3_cost_agg(
+    resolve_iteration3_subfile("iteration_3d", "cost_aggregations.xlsx"),
+    "cost_agg_3d"
+  )
+)
+it3_regression_by_iter <- list(
+  "3c" = safe_read_iteration3_regression(
+    resolve_iteration3_subfile("iteration_3c", "regression_results.xlsx"),
+    "regression_3c"
+  ),
+  "3d" = safe_read_iteration3_regression(
+    resolve_iteration3_subfile("iteration_3d", "regression_results.xlsx"),
+    "regression_3d"
+  )
+)
+it3_cost_agg_raw_3c <- it3_cost_agg_by_iter[["3c"]]
+it3_zpk_raw <- safe_read_iteration3_xlsx(data_path_iteration3_zpk, "zpk")
+it3_top50_raw <- safe_read_iteration3_xlsx(data_path_iteration3_top50, "top50_activiteiten")
+it3_top50_prest_raw <- safe_read_iteration3_xlsx(
+  resolve_iteration3_subfile("iteration_3d", "top50_prestaties.xlsx"),
+  "top50_prestaties"
+)
+it3_acp_ages_raw <- safe_read_iteration3_xlsx(
+  resolve_iteration3_subfile("iteration_3d", "acp_average_ages.xlsx"),
+  "acp_average_ages"
+)
+it3_acp_pop_raw <- safe_read_iteration3_xlsx(
+  resolve_iteration3_subfile("iteration_3d", "ACP_population_descriptives.xlsx"),
+  "acp_population_descriptives"
+)
+it3_zvwk_raw <- safe_read_iteration3_xlsx(
+  resolve_iteration3_subfile("iteration_3d", "zvwk_distributions.xlsx"),
+  "zvwk_distributions"
+)
+
+log_msg(sprintf("[startup] APP_ROOT=%s, getwd()=%s", APP_ROOT, normalizePath(getwd(), winslash = "/", mustWork = FALSE)))
 
 it3_provinces_sf <- load_it3_provinces_sf()
 if (!is.null(it3_provinces_sf)) {
@@ -1654,7 +1752,7 @@ doodsoorzaken <- if (nrow(all_data_initial) > 0) {
 log_msg(sprintf("[startup] Initialization complete: %d base names, %d doodsoorzaken", 
                 length(base_names), length(doodsoorzaken)))
 
-if (!is.na(data_path_iteration3_zpk) && nzchar(data_path_iteration3_zpk)) {
+if (!is.na(data_path_iteration3_zpk) && nzchar(data_path_iteration3_zpk) && file.exists(data_path_iteration3_zpk)) {
   prest_col <- it3_zpk_prestatie_colname(it3_zpk_raw)
   log_msg(sprintf(
     "[startup] Iteratie 3 ZPK: %s (%d rows, prestatie_col=%s)",
@@ -1662,6 +1760,8 @@ if (!is.na(data_path_iteration3_zpk) && nzchar(data_path_iteration3_zpk)) {
     if (is.null(it3_zpk_raw)) 0L else nrow(it3_zpk_raw),
     if (is.na(prest_col)) "MISSING" else prest_col
   ))
+} else {
+  log_msg("[startup] Iteratie 3 ZPK: bestand niet gevonden")
 }
 
 for (iter in names(it3_cost_agg_by_iter)) {
@@ -2244,11 +2344,23 @@ server <- function(input, output, session) {
   })
 
   output$it3_zpk_prestatie_notice <- renderUI({
+    if (is.na(data_path_iteration3_zpk) || !nzchar(data_path_iteration3_zpk) || !file.exists(data_path_iteration3_zpk)) {
+      return(helpText(
+        "Waarschuwing: ZPK-bestand niet gevonden op de server (verwacht in data/data_iteration_3/iteration_3c/zpk_categorieen_tellingen.xlsx). Controleer of de data is gedeployed."
+      ))
+    }
+    if (is.null(it3_zpk_raw) || nrow(it3_zpk_raw) == 0) {
+      return(helpText(
+        "Waarschuwing: ZPK-bestand kon niet worden geladen (",
+        basename(data_path_iteration3_zpk),
+        ")."
+      ))
+    }
     prest_col <- it3_zpk_prestatie_colname(it3_zpk_raw)
     if (!is.na(prest_col)) return(NULL)
     helpText(
       "Waarschuwing: geladen ZPK-bestand mist kolom prestatie_type (",
-      basename(data_path_iteration3_zpk %||% "onbekend"),
+      basename(data_path_iteration3_zpk),
       "). DBC/OZP-filter werkt dan niet."
     )
   })

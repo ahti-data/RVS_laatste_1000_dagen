@@ -18,6 +18,8 @@ jobs:
         mkdir -p deploy
         cp dashboard/app.R deploy/
         cp -r dashboard/data deploy/
+        echo "Deploy contents:"
+        find deploy -type f | sort
 
     - name: 📂 Sync files via SFTP
       uses: wlixcc/SFTP-Deploy-Action@v1.2.4
