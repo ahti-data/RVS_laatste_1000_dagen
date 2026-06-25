@@ -347,6 +347,8 @@ pretty_split_name <- function(x) {
     huishoudsamenstelling = "Huishoudsamenstelling",
     stedgem = "Stedelijkheid",
     wlz_start_period = "WLZ-startperiode",
+    provincie = "Provincie",
+    used_any_acp_2years = "ACP-gebruik (2 jaar)",
     doodsoorzaak = "Doodsoorzaak",
     .default = pretty_default_iteration2(x)
   )
@@ -1291,7 +1293,7 @@ build_it3_cost_map_plot <- function(map_sf, metric, cohort, died) {
     ) +
     ggplot2::theme_minimal(base_size = 13) +
     ggplot2::theme(
-      panel.grid = ggplot2::element_line(linetype = "dashed", color = "grey85"),
+      panel.grid = ggplot2::element_blank(),
       legend.position = "right",
       legend.key.height = ggplot2::unit(2, "cm"),
       plot.title = ggplot2::element_text(face = "bold", hjust = 0.5),
@@ -1877,7 +1879,7 @@ ui <- navbarPage(
             ),
             hr(),
             selectInput("it3_cost_cohort", "Cohort", choices = NULL),
-            selectInput("it3_cost_died", "Populatie (died)", choices = NULL),
+            uiOutput("it3_cost_died_ui"),
             selectInput("it3_cost_bin", "Bin size", choices = NULL),
             selectInput("it3_cost_wlz_start", "WLZ startperiode (filter)", choices = NULL),
             selectInput("it3_cost_provincie", "Provincie (filter)", choices = NULL),
@@ -2078,13 +2080,6 @@ server <- function(input, output, session) {
           updateSelectInput(session, "it3_cost_cohort", choices = cohort_vals, selected = selected_cohort)
         }
       }
-      if ("died" %in% names(df)) {
-        died_vals <- ordered_values(df$died)
-        selected_died <- pick_choice(died_vals, input$it3_cost_died)
-        if (!is.null(selected_died)) {
-          updateSelectInput(session, "it3_cost_died", choices = died_vals, selected = selected_died)
-        }
-      }
       if ("bin_size" %in% names(df)) {
         bin_vals <- ordered_values(df$bin_size)
         selected_bin <- pick_choice(bin_vals, input$it3_cost_bin)
@@ -2213,6 +2208,31 @@ server <- function(input, output, session) {
     updateCheckboxGroupInput(session, "it3_cost_name_multi", selected = character(0))
   })
 
+  output$it3_cost_died_ui <- renderUI({
+    df <- it3_cost_agg_raw
+    req(!is.null(df), nrow(df) > 0)
+    req(!is.null(input$it3_cost_dataset), nzchar(input$it3_cost_dataset))
+    df <- df |> dplyr::filter(as.character(sheet) == as.character(input$it3_cost_dataset))
+    req(nrow(df) > 0, "died" %in% names(df))
+
+    values <- ordered_values(df$died)
+    if (length(values) <= 1) return(NULL)
+
+    selected <- isolate(input$it3_cost_died)
+    if (is.null(selected) || length(intersect(selected, values)) == 0) {
+      selected <- values
+    } else {
+      selected <- intersect(selected, values)
+    }
+
+    checkboxGroupInput(
+      "it3_cost_died",
+      "Populatie",
+      choices = choice_names(values, population_label),
+      selected = selected
+    )
+  })
+
   it3_zpk_filtered <- reactive({
     df <- it3_zpk_raw
     req(!is.null(df), nrow(df) > 0)
@@ -2288,8 +2308,11 @@ server <- function(input, output, session) {
     }
 
     # Apply cohort / died / bin filters
-    if ("died" %in% names(df) && !is.null(input$it3_cost_died) && nzchar(input$it3_cost_died)) {
-      df <- df |> dplyr::filter(as.character(died) == as.character(input$it3_cost_died))
+    if ("died" %in% names(df) && !is.null(input$it3_cost_died) && length(input$it3_cost_died) > 0) {
+      died_values <- ordered_values(df$died)
+      selected_died <- intersect(input$it3_cost_died, died_values)
+      if (length(selected_died) == 0) selected_died <- died_values
+      df <- df |> dplyr::filter(as.character(died) %in% selected_died)
     }
     if ("cohort" %in% names(df) && !is.null(input$it3_cost_cohort) && nzchar(input$it3_cost_cohort)) {
       df <- df |> dplyr::filter(as.character(cohort) == as.character(input$it3_cost_cohort))
@@ -2374,10 +2397,13 @@ server <- function(input, output, session) {
     req(nrow(df) > 0)
 
     multiple_outcomes <- "name" %in% names(df) && dplyr::n_distinct(df$name) > 1
+    multiple_populations <- "died" %in% names(df) && dplyr::n_distinct(df$died_label) > 1
     y_label <- it3_cost_metric_label(metric)
+    bin_is_1000 <- identical(as.character(input$it3_cost_bin %||% ""), "1000")
+    single_t <- dplyr::n_distinct(df$t_label) == 1
+    use_split_bar <- !identical(split_var, "none") && bin_is_1000 && single_t
 
-    if (split_var == "none") {
-      # Bar chart mode
+    if (identical(split_var, "none")) {
       t_levels <- df |>
         dplyr::distinct(t_label, t_num) |>
         dplyr::arrange(t_num) |>
@@ -2399,34 +2425,88 @@ server <- function(input, output, session) {
           text = tooltip_text
         )
       ) +
-        ggplot2::geom_col(position = ggplot2::position_dodge()) +
+        ggplot2::geom_col(position = ggplot2::position_dodge2(width = 0.75, preserve = "single")) +
         ggplot2::scale_fill_manual(values = population_palette) +
         ggplot2::theme_minimal(base_size = 13) +
-        ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank()) +
-        ggplot2::labs(x = "t", y = y_label, fill = "Populatie")
+        ggplot2::theme(legend.position = if (multiple_populations) "bottom" else "none", panel.grid.minor = ggplot2::element_blank()) +
+        ggplot2::labs(x = "t", y = y_label, fill = NULL)
 
       if (multiple_outcomes) {
         p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "fixed")
       }
-    } else {
-      # Line chart mode
+    } else if (use_split_bar) {
+      levels_order <- pretty_value(split_var, ordered_split_values(split_var, df$split_value))
       df <- df |>
-        dplyr::arrange(outcome_label, split_value, t_num)
+        dplyr::mutate(
+          split_label = pretty_value(split_var, split_value),
+          split_label = if (length(levels_order) > 0) {
+            factor(split_label, levels = levels_order)
+          } else {
+            stats::reorder(split_label, metric_value)
+          }
+        ) |>
+        dplyr::arrange(outcome_label, split_label, died_label)
 
       tooltip_text <- paste0(
         if (multiple_outcomes) paste0("Uitkomst: ", df$outcome_label, "<br>") else "",
-        "t: ", df$t_label, "<br>",
-        split_var, ": ", df$split_value, "<br>",
+        pretty_split_name(split_var), ": ", df$split_label, "<br>",
+        "Populatie: ", df$died_label, "<br>",
         "Waarde: ", it3_cost_agg_format_value(df$metric_value, metric)
       )
 
       p <- ggplot2::ggplot(
         df,
         ggplot2::aes(
+          x = split_label,
+          y = metric_value,
+          fill = died_label,
+          text = tooltip_text
+        )
+      ) +
+        ggplot2::geom_col(position = ggplot2::position_dodge2(width = 0.75, preserve = "single")) +
+        ggplot2::scale_fill_manual(values = population_palette) +
+        ggplot2::scale_x_discrete(labels = function(x) axis_label(x, 14)) +
+        ggplot2::theme_minimal(base_size = 13) +
+        ggplot2::theme(
+          legend.position = if (multiple_populations) "bottom" else "none",
+          panel.grid.minor = ggplot2::element_blank(),
+          axis.text.x = ggplot2::element_text(angle = 35, hjust = 1)
+        ) +
+        ggplot2::labs(x = NULL, y = y_label, fill = NULL)
+
+      if (multiple_outcomes) {
+        p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "fixed")
+      }
+    } else {
+      df <- df |>
+        dplyr::arrange(outcome_label, split_value, t_num)
+
+      tooltip_text <- paste0(
+        if (multiple_outcomes) paste0("Uitkomst: ", df$outcome_label, "<br>") else "",
+        "t: ", df$t_label, "<br>",
+        pretty_split_name(split_var), ": ", pretty_value(split_var, df$split_value), "<br>",
+        if (multiple_populations) paste0("Populatie: ", df$died_label, "<br>") else "",
+        "Waarde: ", it3_cost_agg_format_value(df$metric_value, metric)
+      )
+
+      line_group <- if (multiple_populations) {
+        paste(split_value, outcome_label, died_label, sep = " | ")
+      } else {
+        paste(split_value, outcome_label, sep = " | ")
+      }
+      line_label <- if (multiple_populations) {
+        paste(pretty_value(split_var, df$split_value), df$died_label, sep = " | ")
+      } else {
+        pretty_value(split_var, df$split_value)
+      }
+
+      p <- ggplot2::ggplot(
+        df,
+        ggplot2::aes(
           x = t_num,
           y = metric_value,
-          color = split_value,
-          group = paste(split_value, outcome_label),
+          color = line_label,
+          group = line_group,
           text = tooltip_text
         )
       ) +
@@ -2434,7 +2514,7 @@ server <- function(input, output, session) {
         ggplot2::geom_point(size = 2) +
         ggplot2::theme_minimal(base_size = 13) +
         ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank()) +
-        ggplot2::labs(x = "t", y = y_label, color = split_var)
+        ggplot2::labs(x = "t", y = y_label, color = NULL)
 
       if (multiple_outcomes) {
         p <- p + ggplot2::facet_wrap(~ outcome_label, scales = "fixed")
