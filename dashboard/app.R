@@ -2833,9 +2833,9 @@ server <- function(input, output, session) {
     multiple_outcomes <- "name" %in% names(df) && dplyr::n_distinct(df$name) > 1
     multiple_populations <- "died" %in% names(df) && dplyr::n_distinct(df$died_label) > 1
     y_label <- it3_cost_metric_label(metric)
-    bin_is_1000 <- identical(as.character(input$it3_cost_bin %||% ""), "1000")
+    bin_uses_split_bar <- as.character(input$it3_cost_bin %||% "") %in% c("1000", "24months")
     single_t <- dplyr::n_distinct(df$t_label) == 1
-    use_split_bar <- !identical(split_var, "none") && bin_is_1000 && single_t
+    use_split_bar <- !identical(split_var, "none") && bin_uses_split_bar && single_t
 
     if (identical(split_var, "none")) {
       t_levels <- df |>
@@ -2924,9 +2924,9 @@ server <- function(input, output, session) {
       )
 
       line_group <- if (multiple_populations) {
-        paste(split_value, outcome_label, died_label, sep = " | ")
+        paste(df$split_value, df$outcome_label, df$died_label, sep = " | ")
       } else {
-        paste(split_value, outcome_label, sep = " | ")
+        paste(df$split_value, df$outcome_label, sep = " | ")
       }
       line_label <- if (multiple_populations) {
         paste(pretty_value(split_var, df$split_value), df$died_label, sep = " | ")
