@@ -1166,8 +1166,8 @@ it3_cost_agg_format_value <- function(x, metric) {
 it3_cost_metric_label <- function(metric) {
   dplyr::recode(
     metric,
-    kosten_per_persoon = "Kosten per persoon",
-    kosten_per_gebruiker = "Kosten per gebruiker",
+    kosten_per_persoon = "Som per persoon",
+    kosten_per_gebruiker = "Som per gebruiker",
     prevalentie_gebruik = "Prevalentie/gebruik",
     .default = unname(pretty_stat(metric))
   )
@@ -1190,10 +1190,10 @@ it3_cost_agg_metric_choices <- function(df, sheet) {
   if (it3_cost_agg_allows_derived_metrics(sheet)) {
     derived <- c()
     if ("sum_totaal_groep" %in% type_vals) {
-      derived <- c(derived, "Kosten per persoon" = "kosten_per_persoon")
+      derived <- c(derived, "Som per persoon" = "kosten_per_persoon")
     }
     if (all(c("sum_totaal_groep", "n_totaal_gebruikers") %in% type_vals)) {
-      derived <- c(derived, "Kosten per gebruiker" = "kosten_per_gebruiker")
+      derived <- c(derived, "Som per gebruiker" = "kosten_per_gebruiker")
     }
     if ("n_totaal_gebruikers" %in% type_vals) {
       derived <- c(derived, "Prevalentie/gebruik" = "prevalentie_gebruik")
