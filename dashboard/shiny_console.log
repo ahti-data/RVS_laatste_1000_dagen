@@ -1,13 +1,24 @@
-[2026-06-25 16:36:02.992241] [geo] Loaded 12 province polygons
-[2026-06-25 16:36:03.005299] [startup] Initializing data...
-[2026-06-25 16:36:22.841887] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-25 16:36:22.861983] [startup] Initialization complete: 42 base names, 9 doodsoorzaken
-[2026-06-25 16:36:22.864902] [startup] Iteratie 3 ZPK: data/data_iteration_3/iteration_3c/zpk_categorieen_tellingen.xlsx (2659 rows, prestatie_col=prestatie_type)
-[2026-06-25 16:36:22.869244] [startup] Iteratie 3 cost_agg_3c: 46428 rows, 11 sheets (msz_activit_diag, msz_addon, msz_addon_oncology_cancer, msz_addon_oncology_total_cancer, msz_prestaties, msz_prestaties_corrected, msz_prestaties_diag, wlz, wlz_corrected, zvw, zvw_corrected)
-[2026-06-25 16:36:22.875331] [startup] Iteratie 3 cost_agg_3d: 76336 rows, 7 sheets (huisartsdecltab, msz_addon, msz_addon_oncology_cancer, msz_addon_oncology_total, msz_addon_oncology_total_cancer, msz_prestatie_diagnostiek, msz_prestaties)
-[2026-06-25 16:36:29.352259] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-25 16:36:30.230719] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
-[2026-06-25 16:36:30.394464] [data_maandelijks_lijn] Post-filter: 33 rows
-[2026-06-25 16:37:03.502395] [read_all_data] Loaded 258753 rows from 7 sheets
-[2026-06-25 16:37:07.245766] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
-[2026-06-25 16:37:07.804573] [data_maandelijks_lijn] Post-filter: 33 rows
+[2026-06-26 08:22:52.304773] [iter3] cost_agg_3c: 46428 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3c/cost_aggregations.xlsx
+[2026-06-26 08:22:53.177127] [iter3] cost_agg_3d: 76336 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3d/cost_aggregations.xlsx
+[2026-06-26 08:22:53.312953] [iter3] regression_3c: 7310 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3c/regression_results.xlsx
+[2026-06-26 08:22:53.482565] [iter3] regression_3d: 11229 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3d/regression_results.xlsx
+[2026-06-26 08:22:53.52497] [iter3] zpk: 2659 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3c/zpk_categorieen_tellingen.xlsx
+[2026-06-26 08:22:53.567558] [iter3] top50_activiteiten: 1192 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3c/top50_activiteiten.xlsx
+[2026-06-26 08:22:53.640342] [iter3] top50_prestaties: 731 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3d/top50_prestaties.xlsx
+[2026-06-26 08:22:53.655923] [iter3] acp_average_ages: 4 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3d/acp_average_ages.xlsx
+[2026-06-26 08:22:53.672341] [iter3] acp_population_descriptives: 121 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3d/ACP_population_descriptives.xlsx
+[2026-06-26 08:22:53.688499] [iter3] zvwk_distributions: 176 rijen geladen uit C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3d/zvwk_distributions.xlsx
+[2026-06-26 08:22:53.689388] [startup] APP_ROOT=C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard, getwd()=C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard
+[2026-06-26 08:22:53.763717] [geo] Loaded 12 province polygons
+[2026-06-26 08:22:53.764448] [startup] Initializing data...
+[2026-06-26 08:22:56.210112] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-26 08:22:56.221057] [startup] Initialization complete: 42 base names, 9 doodsoorzaken
+[2026-06-26 08:22:56.223781] [startup] Iteratie 3 ZPK: C:/Users/MarcoGriepAHTI/Git Repos/RVS_laatste_1000_dagen/dashboard/data/data_iteration_3/iteration_3c/zpk_categorieen_tellingen.xlsx (2659 rows, prestatie_col=prestatie_type)
+[2026-06-26 08:22:56.226876] [startup] Iteratie 3 cost_agg_3c: 46428 rows, 11 sheets (msz_activit_diag, msz_addon, msz_addon_oncology_cancer, msz_addon_oncology_total_cancer, msz_prestaties, msz_prestaties_corrected, msz_prestaties_diag, wlz, wlz_corrected, zvw, zvw_corrected)
+[2026-06-26 08:22:56.230947] [startup] Iteratie 3 cost_agg_3d: 76336 rows, 7 sheets (huisartsdecltab, msz_addon, msz_addon_oncology_cancer, msz_addon_oncology_total, msz_addon_oncology_total_cancer, msz_prestatie_diagnostiek, msz_prestaties)
+[2026-06-26 08:23:01.124631] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-26 08:23:01.604284] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
+[2026-06-26 08:23:01.63773] [data_maandelijks_lijn] Post-filter: 33 rows
+[2026-06-26 08:23:05.261799] [read_all_data] Loaded 258753 rows from 7 sheets
+[2026-06-26 08:23:05.674908] [data_maandelijks_lijn] Base: 1079 rows (domein=bedragwlzzin, maatstaf=gemiddelde_per_persoon)
+[2026-06-26 08:23:05.684297] [data_maandelijks_lijn] Post-filter: 33 rows
