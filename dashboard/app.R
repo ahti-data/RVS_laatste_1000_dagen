@@ -1175,7 +1175,7 @@ it3_cost_metric_label <- function(metric) {
 
 it3_cost_agg_allows_derived_metrics <- function(sheet) {
   if (is.null(sheet) || !nzchar(as.character(sheet))) return(FALSE)
-  !grepl("diag|addon", as.character(sheet), ignore.case = TRUE)
+  !grepl("diag", as.character(sheet), ignore.case = TRUE)
 }
 
 it3_cost_agg_metric_choices <- function(df, sheet) {
@@ -2252,16 +2252,7 @@ ui <- navbarPage(
         sidebarLayout(
           sidebarPanel(
             width = 3,
-            selectInput("it3_acp_split_by", "Split variable", choices = NULL),
-            radioButtons(
-              "it3_acp_metric",
-              "Kies variabele",
-              choices = c(
-                "Aantal gebruikers" = "n_users",
-                "Prevalentie" = "prevalentie"
-              ),
-              selected = "n_users"
-            )
+            selectInput("it3_acp_split_by", "Split variable", choices = NULL)
           ),
           mainPanel(
             width = 9,
@@ -3449,7 +3440,6 @@ server <- function(input, output, session) {
     df <- df |> dplyr::filter(as.character(split_by) == as.character(split_sel))
     req(nrow(df) > 0)
 
-    metric <- input$it3_acp_metric %||% "n_users"
     df |>
       dplyr::mutate(
         group_label = if (identical(split_sel, "cohort")) {
@@ -3457,15 +3447,7 @@ server <- function(input, output, session) {
         } else {
           pretty_value(split_sel, group)
         },
-        metric_value = if (identical(metric, "prevalentie")) {
-          dplyr::if_else(
-            is.na(numericize(n_population)) | numericize(n_population) == 0,
-            NA_real_,
-            numericize(n_users_acp_consults_2years) / numericize(n_population)
-          )
-        } else {
-          numericize(n_users_acp_consults_2years)
-        },
+        metric_value = numericize(n_users_acp_consults_2years),
         died_label = population_label(died)
       ) |>
       dplyr::filter(!is.na(metric_value))
@@ -3487,8 +3469,6 @@ server <- function(input, output, session) {
     df <- it3_acp_pop_filtered()
     req(nrow(df) > 0)
 
-    metric <- input$it3_acp_metric %||% "n_users"
-    y_label <- if (identical(metric, "prevalentie")) "Prevalentie" else "Aantal gebruikers"
     multiple_populations <- dplyr::n_distinct(df$died_label) > 1
 
     df <- df |>
@@ -3496,12 +3476,8 @@ server <- function(input, output, session) {
         tooltip = paste0(
           "Groep: ", group_label, "<br>",
           "Populatie: ", died_label, "<br>",
-          "Waarde: ",
-          if (identical(metric, "prevalentie")) {
-            scales::percent(metric_value, accuracy = 0.01)
-          } else {
-            scales::comma(metric_value, big.mark = ",", decimal.mark = ".")
-          }
+          "Aantal gebruikers: ",
+          scales::comma(metric_value, big.mark = ",", decimal.mark = ".")
         )
       )
 
@@ -3516,17 +3492,14 @@ server <- function(input, output, session) {
     ) +
       ggplot2::geom_col(position = ggplot2::position_dodge2(width = 0.75, preserve = "single")) +
       ggplot2::scale_fill_manual(values = population_palette) +
+      ggplot2::scale_y_continuous(labels = scales::comma_format(big.mark = ",", decimal.mark = ".")) +
       ggplot2::theme_minimal(base_size = 13) +
       ggplot2::theme(
         legend.position = if (multiple_populations) "bottom" else "none",
         panel.grid.minor = ggplot2::element_blank(),
         axis.text.x = ggplot2::element_text(angle = 35, hjust = 1)
       ) +
-      ggplot2::labs(x = NULL, y = y_label, fill = NULL)
-
-    if (identical(metric, "prevalentie")) {
-      p <- p + ggplot2::scale_y_continuous(labels = scales::percent_format(accuracy = 0.1))
-    }
+      ggplot2::labs(x = NULL, y = "Aantal gebruikers", fill = NULL)
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
