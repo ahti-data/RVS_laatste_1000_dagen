@@ -3510,7 +3510,9 @@ server <- function(input, output, session) {
       paste0("iteratie3_acp_descriptives_", input$it3_acp_split_by %||% "split", "_", Sys.Date(), ".xlsx")
     },
     content = function(file) {
-      writexl::write_xlsx(it3_acp_pop_filtered(), file)
+      export_df <- it3_acp_pop_filtered() |>
+        dplyr::select(-dplyr::any_of("n_population"))
+      writexl::write_xlsx(export_df, file)
     }
   )
 
