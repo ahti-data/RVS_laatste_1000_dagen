@@ -93,6 +93,18 @@ resolve_existing_path <- function(candidates) {
   normalizePath(hit[[1]], winslash = "/", mustWork = FALSE)
 }
 
+source_util <- function(rel_path) {
+  path <- resolve_existing_path(c(rel_path, file.path("dashboard", rel_path)))
+  if (is.na(path)) {
+    stop("Cannot find utility file: ", rel_path)
+  }
+  source(path, local = FALSE)
+}
+
+source_util("utils/format_thinkcell_download.R")
+source_util("utils/chart_downloads.R")
+source_util("data/metadata/brand_colors.R")
+
 demographic_cols_iteration2 <- c(
   "doodsoorzaak",
   "age_cat",
@@ -566,6 +578,13 @@ build_export_name <- function(...) {
   sanitize_filename(paste(parts, collapse = "_"))
 }
 
+combine_series <- function(..., sep = " | ") {
+  parts <- data.frame(..., stringsAsFactors = FALSE)
+  apply(parts, 1, function(row) {
+  paste(row[!is.na(row) & nzchar(as.character(row))], collapse = sep)
+  })
+}
+
 save_plot_png <- function(file, plot_obj) {
   ggplot2::ggsave(
     file,
@@ -841,8 +860,13 @@ iteration2_panels <- function() {
           plotlyOutput("plot_agg", height = "620px"),
           br(),
           div(
-            style = "display: flex; gap: 12px; align-items: center;",
-            downloadButton("dl_agg", "Gegevens downloaden"),
+            style = "display: flex; gap: 12px; align-items: center; flex-wrap: wrap;",
+            chart_data_downloads_ui(
+              "iter2_agg_dl",
+              chart_type = "line",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            ),
             downloadButton("dl_agg_plot", "Grafiek downloaden")
           )
         )
@@ -863,8 +887,13 @@ iteration2_panels <- function() {
           plotlyOutput("plot_heatmap", height = "720px"),
           br(),
           div(
-            style = "display: flex; gap: 12px; align-items: center;",
-            downloadButton("dl_heatmap", "Gegevens downloaden"),
+            style = "display: flex; gap: 12px; align-items: center; flex-wrap: wrap;",
+            chart_data_downloads_ui(
+              "iter2_hm_dl",
+              chart_type = "scatter",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            ),
             downloadButton("dl_heatmap_plot", "Grafiek downloaden")
           )
         )
@@ -897,8 +926,13 @@ iteration2_panels <- function() {
           plotlyOutput("plot_top", height = "720px"),
           br(),
           div(
-            style = "display: flex; gap: 12px; align-items: center;",
-            downloadButton("dl_top", "Gegevens downloaden"),
+            style = "display: flex; gap: 12px; align-items: center; flex-wrap: wrap;",
+            chart_data_downloads_ui(
+              "iter2_top_dl",
+              chart_type = "bar",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            ),
             downloadButton("dl_top_plot", "Grafiek downloaden")
           )
         )
@@ -1890,7 +1924,12 @@ ui <- navbarPage(
                  selectInput("pop_jaar", "Jarenselectie:", choices = c("2019", "2023", "2019 + 2023"), selected = "2019 + 2023"),
                  selectInput("pop_split", "Kies populaties:", choices = c("Enkel totale populatie", "Totaal + subgroepen doodsoorzaak"), selected = "Totaal + subgroepen doodsoorzaak"),
                  hr(),
-                 downloadButton("dl_basis", "Download Data voor Think-cell")
+                 chart_data_downloads_ui(
+                   "iter1_basis_dl",
+                   chart_type = "grouped_bar",
+                   raw_label = "Gegevens downloaden",
+                   thinkcell_label = "Download voor Think-cell"
+                 )
                ),
                mainPanel(
                  plotlyOutput("plot_basispopulatie", height = "600px")
@@ -1923,7 +1962,12 @@ ui <- navbarPage(
                              choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"),
                              selected = "Overleden vs. In leven (Controle)"),
                  hr(),
-                 downloadButton("dl_totaal", "Download Data voor Think-cell")
+                 chart_data_downloads_ui(
+                   "iter1_totaal_dl",
+                   chart_type = "grouped_bar",
+                   raw_label = "Gegevens downloaden",
+                   thinkcell_label = "Download voor Think-cell"
+                 )
                ),
                mainPanel(
                  plotlyOutput("plot_zorg_totaal", height = "600px")
@@ -1965,7 +2009,12 @@ ui <- navbarPage(
                                 choices = NULL, selected = NULL, multiple = TRUE),
                  helpText("Tip: in lijngrafiekmodus kun je lijnen aan/uit zetten via 'Zichtbare lijnen'"),
                  hr(),
-                 downloadButton("dl_maandelijks", "Download Data voor Think-cell")
+                 chart_data_downloads_ui(
+                   "iter1_tijd_dl",
+                   chart_type = "line",
+                   raw_label = "Gegevens downloaden",
+                   thinkcell_label = "Download voor Think-cell"
+                 )
                ),
                mainPanel(
                  plotlyOutput("plot_zorg_maandelijks", height = "600px")
@@ -1984,7 +2033,14 @@ ui <- navbarPage(
                  selectInput("cost_pop", "Populatie (Doodsoorzaak):",
                              choices = doodsoorzaken,
                              selected = "all"),
-                 helpText("Boxplot-achtig overzicht op basis van quantielen per cohort en status.")
+                 helpText("Boxplot-achtig overzicht op basis van quantielen per cohort en status."),
+                 hr(),
+                 chart_data_downloads_ui(
+                   "iter1_cost_dl",
+                   chart_type = "scatter",
+                   raw_label = "Gegevens downloaden",
+                   thinkcell_label = "Download voor Think-cell"
+                 )
                ),
                mainPanel(
                  plotlyOutput("plot_cost", height = "600px")
@@ -2010,7 +2066,12 @@ ui <- navbarPage(
                                          "Geobserveerd 2019 vs. Controle 2019" = "obs_2019_vs_ctrl_2019"),
                              selected = "obs_2023_vs_ctrl_2023"),
                  hr(),
-                 downloadButton("dl_butterfly", "Download Data voor Think-cell")
+                 chart_data_downloads_ui(
+                   "iter1_bfly_dl",
+                   chart_type = "bar",
+                   raw_label = "Gegevens downloaden",
+                   thinkcell_label = "Download voor Think-cell"
+                 )
                ),
                mainPanel(
                  plotlyOutput("plot_butterfly", height = "700px")
@@ -2039,7 +2100,12 @@ ui <- navbarPage(
                              choices = c("Geen vergelijking", "Overleden vs. In leven (Controle)"),
                              selected = "Overleden vs. In leven (Controle)"),
                  hr(),
-                 downloadButton("dl_interventies", "Download Data voor Think-cell")
+                 chart_data_downloads_ui(
+                   "iter1_int_dl",
+                   chart_type = "grouped_bar",
+                   raw_label = "Gegevens downloaden",
+                   thinkcell_label = "Download voor Think-cell"
+                 )
                ),
                mainPanel(
                  plotlyOutput("plot_interventies", height = "600px")
@@ -2092,7 +2158,12 @@ ui <- navbarPage(
             width = 9,
             plotlyOutput("it3_plot_zpk", height = "720px"),
             br(),
-            downloadButton("it3_dl_zpk", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_zpk_dl",
+              chart_type = "stacked_bar",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            )
           )
         )
       ),
@@ -2126,7 +2197,18 @@ ui <- navbarPage(
               column(3, plotlyOutput("it3_plot_top50_compare", height = "820px"))
             ),
             br(),
-            downloadButton("it3_dl_top50", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_top50_main_dl",
+              chart_type = "bar",
+              raw_label = "Gegevens downloaden (hoofd)",
+              thinkcell_label = "Download voor Think-cell (hoofd)"
+            ),
+            chart_data_downloads_ui(
+              "iter3_top50_cmp_dl",
+              chart_type = "bar",
+              raw_label = "Gegevens downloaden (vergelijking)",
+              thinkcell_label = "Download voor Think-cell (vergelijking)"
+            )
           )
         )
       ),
@@ -2161,7 +2243,18 @@ ui <- navbarPage(
               column(3, plotlyOutput("it3_plot_top50_prest_compare", height = "820px"))
             ),
             br(),
-            downloadButton("it3_dl_top50_prest", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_prest_main_dl",
+              chart_type = "bar",
+              raw_label = "Gegevens downloaden (hoofd)",
+              thinkcell_label = "Download voor Think-cell (hoofd)"
+            ),
+            chart_data_downloads_ui(
+              "iter3_prest_cmp_dl",
+              chart_type = "bar",
+              raw_label = "Gegevens downloaden (vergelijking)",
+              thinkcell_label = "Download voor Think-cell (vergelijking)"
+            )
           )
         )
       ),
@@ -2196,7 +2289,12 @@ ui <- navbarPage(
             width = 9,
             plotlyOutput("it3_plot_cost_agg", height = "720px"),
             br(),
-            downloadButton("it3_dl_cost_agg", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_cost_dl",
+              chart_type = "line",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            )
           )
         )
       ),
@@ -2243,7 +2341,12 @@ ui <- navbarPage(
             h4(textOutput("it3_reg_title")),
             uiOutput("it3_reg_plot_ui"),
             br(),
-            downloadButton("it3_dl_regression", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_reg_dl",
+              chart_type = "bar",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            )
           )
         )
       ),
@@ -2262,7 +2365,12 @@ ui <- navbarPage(
             h4("ACP populatie descriptives"),
             plotlyOutput("it3_plot_acp_pop", height = "720px"),
             br(),
-            downloadButton("it3_dl_acp_pop", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_acp_dl",
+              chart_type = "grouped_bar",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            )
           )
         )
       ),
@@ -2284,7 +2392,12 @@ ui <- navbarPage(
             width = 9,
             plotlyOutput("it3_plot_zvwk", height = "720px"),
             br(),
-            downloadButton("it3_dl_zvwk", "Gegevens downloaden")
+            chart_data_downloads_ui(
+              "iter3_zvwk_dl",
+              chart_type = "scatter",
+              raw_label = "Gegevens downloaden",
+              thinkcell_label = "Download voor Think-cell"
+            )
           )
         )
       )
@@ -2950,16 +3063,72 @@ server <- function(input, output, session) {
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
 
-  output$it3_dl_cost_agg <- downloadHandler(
-    filename = function() {
-      paste0("iteratie3_cost_agg_", input$it3_cost_metric %||% "metric", "_", Sys.Date(), ".xlsx")
-    },
-    content = function(file) {
-      metric <- input$it3_cost_metric
-      req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
-      df <- prepare_it3_cost_agg_export_df(it3_cost_agg_filtered(), metric)
-      writexl::write_xlsx(df, file)
+  it3_cost_export_data <- reactive({
+    metric <- input$it3_cost_metric
+    req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
+
+    df <- prepare_it3_cost_agg_metric_df(it3_cost_agg_filtered(), metric)
+    if (nrow(df) == 0) return(df)
+
+    split_var <- input$it3_cost_split_var %||% "none"
+    if ("died" %in% names(df)) {
+      df$died_label <- population_label(df$died)
+    } else {
+      df$died_label <- "Totaal"
     }
+
+    multiple_outcomes <- "name" %in% names(df) && dplyr::n_distinct(df$name) > 1
+    bin_uses_split_bar <- as.character(input$it3_cost_bin %||% "") %in% c("1000", "24months")
+    single_t <- dplyr::n_distinct(df$t) == 1
+    use_split_bar <- !identical(split_var, "none") && bin_uses_split_bar && single_t
+
+    if (identical(split_var, "none")) {
+      t_levels <- df |>
+        dplyr::distinct(t_label = as.character(t), t_num = numericize(t)) |>
+        dplyr::arrange(t_num) |>
+        dplyr::pull(t_label)
+      df |>
+        dplyr::mutate(
+          category = factor(as.character(t), levels = t_levels),
+          series = if (multiple_outcomes) combine_series(died_label, name) else as.character(died_label),
+          export_value = metric_value
+        ) |>
+        dplyr::mutate(category = as.character(category))
+    } else if (use_split_bar) {
+      df |>
+        dplyr::mutate(
+          category = as.character(pretty_value(split_var, .data[[split_var]])),
+          series = as.character(died_label),
+          export_value = metric_value
+        )
+    } else {
+      df |>
+        dplyr::mutate(
+          category = as.character(numericize(t)),
+          series = combine_series(pretty_value(split_var, .data[[split_var]]), died_label),
+          export_value = metric_value
+        )
+    }
+  })
+
+  it3_cost_chart_type <- reactive({
+    split_var <- input$it3_cost_split_var %||% "none"
+    bin_uses_split_bar <- as.character(input$it3_cost_bin %||% "") %in% c("1000", "24months")
+    df <- it3_cost_agg_filtered()
+    single_t <- nrow(df) > 0 && dplyr::n_distinct(df$t) == 1
+    use_split_bar <- !identical(split_var, "none") && bin_uses_split_bar && single_t
+    if (identical(split_var, "none") || use_split_bar) "grouped_bar" else "line"
+  })
+
+  chart_data_downloads_server(
+    id = "iter3_cost_dl",
+    data = it3_cost_export_data,
+    chart_type = it3_cost_chart_type,
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_cost_agg",
+    agg_fun = NULL
   )
 
   observe({
@@ -3151,6 +3320,45 @@ server <- function(input, output, session) {
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
+
+  it3_zpk_export_data <- reactive({
+    metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
+    if (it3_zpk_metric_unavailable_for_all(metric, input$it3_zpk_prestatie_type)) {
+      return(tibble::tibble())
+    }
+
+    df <- it3_zpk_filtered()
+    req("t" %in% names(df), "zpk_category" %in% names(df))
+    if (!identical(metric, "gemiddelde_kosten_per_persoon")) {
+      req(metric %in% names(df))
+    } else {
+      req("sum_totaal_groep" %in% names(df), "n_totaal_population" %in% names(df))
+    }
+
+    df |>
+      dplyr::mutate(
+        t_label = as.character(t),
+        zpk_category = as.character(zpk_category),
+        metric_value = it3_zpk_metric_values(df, metric)
+      ) |>
+      dplyr::filter(!is.na(metric_value)) |>
+      dplyr::transmute(
+        category = t_label,
+        series = zpk_category,
+        metric_value = metric_value
+      )
+  })
+
+  chart_data_downloads_server(
+    id = "iter3_zpk_dl",
+    data = it3_zpk_export_data,
+    chart_type = "stacked_bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "metric_value",
+    filename_prefix = "iteratie3_zpk",
+    agg_fun = NULL
+  )
 
   it3_top50_filtered <- reactive({
     df <- it3_top50_raw
@@ -3358,6 +3566,73 @@ server <- function(input, output, session) {
     it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE)
   })
 
+  it3_top50_main_export <- reactive({
+    df <- it3_top50_filtered()
+    metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszzorgactiviteitomschrijving",
+      "vektmszdeclaratiecode"
+    )
+    df_plot <- it3_top50_plot_df(df, metric, label_levels = label_levels)
+    if (nrow(df_plot) == 0) return(df_plot)
+    df_plot |>
+      dplyr::transmute(
+        category = as.character(label_short),
+        series = "Geselecteerd",
+        export_value = value_num
+      )
+  })
+
+  it3_top50_compare_export <- reactive({
+    df <- it3_top50_filtered()
+    metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
+    suffix <- it3_top50_compare_suffix()
+    if (is.na(suffix) || !nzchar(suffix)) return(tibble::tibble())
+    compare_col <- paste0(metric, suffix)
+    if (!compare_col %in% names(df)) return(tibble::tibble())
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszzorgactiviteitomschrijving",
+      "vektmszdeclaratiecode"
+    )
+    df_plot <- it3_top50_plot_df(
+      df,
+      compare_col,
+      label_prefix = paste0("Vergelijking: ", compare_col),
+      label_levels = label_levels
+    )
+    if (nrow(df_plot) == 0) return(df_plot)
+    df_plot |>
+      dplyr::transmute(
+        category = as.character(label_short),
+        series = "Vergelijking",
+        export_value = value_num
+      )
+  })
+
+  chart_data_downloads_server(
+    id = "iter3_top50_main_dl",
+    data = it3_top50_main_export,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_top50_main",
+    agg_fun = NULL
+  )
+
+  chart_data_downloads_server(
+    id = "iter3_top50_cmp_dl",
+    data = it3_top50_compare_export,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_top50_compare",
+    agg_fun = NULL
+  )
+
   it3_top50_prest_filtered <- reactive({
     df <- it3_top50_prest_raw
     req(!is.null(df), nrow(df) > 0, "ranked_by" %in% names(df))
@@ -3432,6 +3707,85 @@ server <- function(input, output, session) {
     it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE)
   })
 
+  it3_top50_prest_main_export <- reactive({
+    df <- it3_top50_prest_filtered()
+    metric <- input$it3_top50_prest_metric %||% "n_totaal_gebruikers"
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszdbczorgproductomschrijving",
+      "vektmszdbczorgproduct"
+    )
+    df_plot <- it3_top50_plot_df(
+      df,
+      metric,
+      desc_col = "mszdbczorgproductomschrijving",
+      code_col = "vektmszdbczorgproduct",
+      item_label = "Prestatie",
+      label_levels = label_levels,
+      include_median = TRUE
+    )
+    if (nrow(df_plot) == 0) return(df_plot)
+    df_plot |>
+      dplyr::transmute(
+        category = as.character(label_short),
+        series = "Geselecteerd",
+        export_value = value_num
+      )
+  })
+
+  it3_top50_prest_compare_export <- reactive({
+    df <- it3_top50_prest_filtered()
+    metric <- input$it3_top50_prest_metric %||% "n_totaal_gebruikers"
+    suffix <- it3_top50_prest_compare_suffix()
+    if (is.na(suffix) || !nzchar(suffix)) return(tibble::tibble())
+    compare_col <- paste0(metric, suffix)
+    if (!compare_col %in% names(df)) return(tibble::tibble())
+    label_levels <- it3_top50_label_levels_from_df(
+      df,
+      "mszdbczorgproductomschrijving",
+      "vektmszdbczorgproduct"
+    )
+    df_plot <- it3_top50_plot_df(
+      df,
+      compare_col,
+      desc_col = "mszdbczorgproductomschrijving",
+      code_col = "vektmszdbczorgproduct",
+      item_label = "Prestatie",
+      label_prefix = paste0("Vergelijking: ", compare_col),
+      label_levels = label_levels,
+      include_median = TRUE
+    )
+    if (nrow(df_plot) == 0) return(df_plot)
+    df_plot |>
+      dplyr::transmute(
+        category = as.character(label_short),
+        series = "Vergelijking",
+        export_value = value_num
+      )
+  })
+
+  chart_data_downloads_server(
+    id = "iter3_prest_main_dl",
+    data = it3_top50_prest_main_export,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_top50_prest_main",
+    agg_fun = NULL
+  )
+
+  chart_data_downloads_server(
+    id = "iter3_prest_cmp_dl",
+    data = it3_top50_prest_compare_export,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_top50_prest_compare",
+    agg_fun = NULL
+  )
+
   it3_acp_pop_filtered <- reactive({
     df <- it3_acp_pop_raw
     req(!is.null(df), nrow(df) > 0, "split_by" %in% names(df))
@@ -3505,15 +3859,26 @@ server <- function(input, output, session) {
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
 
-  output$it3_dl_acp_pop <- downloadHandler(
-    filename = function() {
-      paste0("iteratie3_acp_descriptives_", input$it3_acp_split_by %||% "split", "_", Sys.Date(), ".xlsx")
-    },
-    content = function(file) {
-      export_df <- it3_acp_pop_filtered() |>
-        dplyr::select(-dplyr::any_of("n_population"))
-      writexl::write_xlsx(export_df, file)
-    }
+  it3_acp_export_data <- reactive({
+    df <- it3_acp_pop_filtered()
+    if (nrow(df) == 0) return(df)
+    df |>
+      dplyr::transmute(
+        category = as.character(group_label),
+        series = as.character(died_label),
+        export_value = metric_value
+      )
+  })
+
+  chart_data_downloads_server(
+    id = "iter3_acp_dl",
+    data = it3_acp_export_data,
+    chart_type = "grouped_bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_acp_descriptives",
+    agg_fun = NULL
   )
 
   it3_zvwk_filtered <- reactive({
@@ -3597,70 +3962,19 @@ server <- function(input, output, session) {
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
 
-  output$it3_dl_zvwk <- downloadHandler(
-    filename = function() {
-      paste0(
-        "iteratie3_zvwk_",
-        input$it3_zvwk_cost_type %||% "type",
-        "_",
-        input$it3_zvwk_cohort %||% "cohort",
-        "_",
-        Sys.Date(),
-        ".xlsx"
-      )
-    },
-    content = function(file) {
-      writexl::write_xlsx(it3_zvwk_filtered(), file)
-    }
-  )
+  it3_zvwk_export_data <- reactive({
+    prepare_it3_zvwk_hist_df(it3_zvwk_filtered())
+  })
 
-  output$it3_dl_top50_prest <- downloadHandler(
-    filename = function() {
-      paste0("iteratie3_top50_prestaties_", input$it3_top50_prest_metric %||% "metric", "_", Sys.Date(), ".xlsx")
-    },
-    content = function(file) {
-      df <- it3_top50_prest_filtered()
-      metric <- input$it3_top50_prest_metric %||% "n_totaal_gebruikers"
-      suffix <- it3_top50_prest_compare_suffix()
-      compare_col <- if (!is.na(suffix) && nzchar(suffix)) paste0(metric, suffix) else NA_character_
-      if (!is.na(compare_col) && compare_col %in% names(df)) {
-        df <- df |> dplyr::mutate(compare_value = .data[[compare_col]])
-      }
-      writexl::write_xlsx(df, file)
-    }
-  )
-
-  output$it3_dl_zpk <- downloadHandler(
-    filename = function() {
-      paste0("iteratie3_zpk_", input$it3_zpk_metric %||% "metric", "_", Sys.Date(), ".xlsx")
-    },
-    content = function(file) {
-      df <- it3_zpk_filtered()
-      metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
-      if (!it3_zpk_metric_unavailable_for_all(metric, input$it3_zpk_prestatie_type) &&
-          identical(metric, "gemiddelde_kosten_per_persoon") &&
-          all(c("sum_totaal_groep", "n_totaal_population") %in% names(df))) {
-        df <- df |>
-          dplyr::mutate(gemiddelde_kosten_per_persoon = it3_zpk_metric_values(df, metric))
-      }
-      writexl::write_xlsx(df, file)
-    }
-  )
-
-  output$it3_dl_top50 <- downloadHandler(
-    filename = function() {
-      paste0("iteratie3_top50_", input$it3_top50_metric %||% "metric", "_", Sys.Date(), ".xlsx")
-    },
-    content = function(file) {
-      df <- it3_top50_filtered()
-      metric <- input$it3_top50_metric %||% "n_totaal_gebruikers"
-      suffix <- it3_top50_compare_suffix()
-      compare_col <- if (!is.na(suffix) && nzchar(suffix)) paste0(metric, suffix) else NA_character_
-      if (!is.na(compare_col) && compare_col %in% names(df)) {
-        df <- df |> dplyr::mutate(compare_value = .data[[compare_col]])
-      }
-      writexl::write_xlsx(df, file)
-    }
+  chart_data_downloads_server(
+    id = "iter3_zvwk_dl",
+    data = it3_zvwk_export_data,
+    chart_type = "scatter",
+    category_col = "cost_bin",
+    series_col = "cost_bin",
+    value_col = "pop_num",
+    filename_prefix = "iteratie3_zvwk",
+    agg_fun = NULL
   )
 
   it3_regression_filtered <- reactive({
@@ -3751,19 +4065,26 @@ server <- function(input, output, session) {
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
 
-  output$it3_dl_regression <- downloadHandler(
-    filename = function() {
-      paste0(
-        "iteratie3_regressie_",
-        sanitize_filename(input$it3_reg_dependent_var %||% "dependent_var"),
-        "_",
-        Sys.Date(),
-        ".xlsx"
+  it3_regression_export_data <- reactive({
+    df <- it3_regression_filtered()
+    if (nrow(df) == 0) return(df)
+    df |>
+      dplyr::transmute(
+        category = as.character(coefficient),
+        series = "Coëfficiënt",
+        export_value = estimate
       )
-    },
-    content = function(file) {
-      writexl::write_xlsx(it3_regression_filtered(), file)
-    }
+  })
+
+  chart_data_downloads_server(
+    id = "iter3_reg_dl",
+    data = it3_regression_export_data,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "iteratie3_regressie",
+    agg_fun = NULL
   )
 
   # ==========================================
@@ -3800,10 +4121,23 @@ server <- function(input, output, session) {
       labs(title = "Basispopulatie", x = "Populatie / Doodsoorzaak", y = "Aantal")
     plotly::ggplotly(p)
   })
-  
-  output$dl_basis <- downloadHandler(
-    filename = function() { paste("basispopulatie-", Sys.Date(), ".csv", sep="") },
-    content = function(file) { write.csv2(data_basis(), file, row.names = FALSE) }
+
+  data_basis_export <- reactive({
+    df <- data_basis()
+    if (nrow(df) == 0) return(df)
+    df |>
+      dplyr::mutate(series = combine_series(died, cohort))
+  })
+
+  chart_data_downloads_server(
+    id = "iter1_basis_dl",
+    data = data_basis_export,
+    chart_type = "grouped_bar",
+    category_col = "doodsoorzaak",
+    series_col = "series",
+    value_col = "n_mensen",
+    filename_prefix = "basispopulatie",
+    agg_fun = NULL
   )
   
   # ==========================================
@@ -3885,10 +4219,27 @@ server <- function(input, output, session) {
       )
     plotly::ggplotly(p)
   })
-  
-  output$dl_totaal <- downloadHandler(
-    filename = function() { paste("zorg_totaal-", Sys.Date(), ".csv", sep="") },
-    content = function(file) { write.csv2(data_totaal(), file, row.names = FALSE) }
+
+  data_totaal_export <- reactive({
+    df <- data_totaal()
+    if (nrow(df) == 0) return(df)
+    if (identical(input$tot_jaar, "Beide")) {
+      df <- df |> dplyr::mutate(series = combine_series(died, cohort))
+    } else {
+      df <- df |> dplyr::mutate(series = as.character(died))
+    }
+    df
+  })
+
+  chart_data_downloads_server(
+    id = "iter1_totaal_dl",
+    data = data_totaal_export,
+    chart_type = "grouped_bar",
+    category_col = "name",
+    series_col = "series",
+    value_col = "waarde",
+    filename_prefix = "zorg_totaal",
+    agg_fun = NULL
   )
   
   # ==========================================
@@ -4207,10 +4558,61 @@ server <- function(input, output, session) {
 
     plotly::ggplotly(p)
   })
-  
-  output$dl_maandelijks <- downloadHandler(
-    filename = function() { paste("zorg_over_tijd-", Sys.Date(), ".csv", sep="") },
-    content = function(file) { write.csv2(data_maandelijks(), file, row.names = FALSE) }
+
+  data_maandelijks_export <- reactive({
+    if (identical(input$mnd_grafiek, "Lijngrafiek")) {
+      df <- lijn_data_maandelijks()
+      if (nrow(df) == 0) return(df)
+      selected_lijnen <- input$mnd_zichtbare_lijnen
+      available_lijnen <- unique(df$lijn)
+      if (is.null(selected_lijnen) || length(selected_lijnen) == 0) {
+        selected_lijnen <- available_lijnen
+      } else {
+        valid_selection <- intersect(trimws(as.character(selected_lijnen)), available_lijnen)
+        selected_lijnen <- if (length(valid_selection) > 0) valid_selection else available_lijnen
+      }
+      df |>
+        dplyr::filter(lijn %in% selected_lijnen) |>
+        dplyr::transmute(
+          category = as.character(t_numeric),
+          series = as.character(lijn),
+          export_value = value
+        )
+    } else {
+      df <- data_maandelijks()
+      if (nrow(df) == 0) return(df)
+      selected_domains <- input$mnd_domein
+      if (length(selected_domains) > 1) {
+        df |>
+          dplyr::transmute(
+            category = as.character(t_numeric),
+            series = as.character(selected_domein),
+            export_value = value
+          )
+      } else {
+        df |>
+          dplyr::transmute(
+            category = as.character(t_numeric),
+            series = as.character(died),
+            export_value = value
+          )
+      }
+    }
+  })
+
+  iter1_tijd_chart_type <- reactive({
+    if (identical(input$mnd_grafiek, "Lijngrafiek")) "line" else "stacked_bar"
+  })
+
+  chart_data_downloads_server(
+    id = "iter1_tijd_dl",
+    data = data_maandelijks_export,
+    chart_type = iter1_tijd_chart_type,
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "zorg_over_tijd",
+    agg_fun = NULL
   )
   
   # ==========================================
@@ -4319,6 +4721,23 @@ server <- function(input, output, session) {
       plotly::ggplotly(p)
     })
   })
+
+  plot_cost_export <- reactive({
+    df <- plot_cost_data()
+    if (nrow(df) == 0) return(df)
+    df |> dplyr::mutate(series = combine_series(died, cohort))
+  })
+
+  chart_data_downloads_server(
+    id = "iter1_cost_dl",
+    data = plot_cost_export,
+    chart_type = "scatter",
+    category_col = "t",
+    series_col = "series",
+    value_col = "mediaan_per_persoon",
+    filename_prefix = "kosten_boxplot",
+    agg_fun = NULL
+  )
 
   # ==========================================
   # SERVER LOGIC: TAB 5 - Zorg per Domein Butterfly
@@ -4470,10 +4889,28 @@ server <- function(input, output, session) {
       plotly::ggplotly(p)
     })
   })
-  
-  output$dl_butterfly <- downloadHandler(
-    filename = function() { paste("zorg_butterfly-", Sys.Date(), ".csv", sep="") },
-    content = function(file) { write.csv2(data_butterfly(), file, row.names = FALSE) }
+
+  data_butterfly_export <- reactive({
+    df <- data_butterfly()
+    if (nrow(df) == 0) return(df)
+    df |>
+      dplyr::transmute(
+        category = as.character(doodsoorzaak),
+        series = as.character(group),
+        export_value = abs(value_butterfly),
+        value_butterfly = value_butterfly
+      )
+  })
+
+  chart_data_downloads_server(
+    id = "iter1_bfly_dl",
+    data = data_butterfly_export,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "zorg_butterfly",
+    agg_fun = NULL
   )
 
   # ==========================================
@@ -4576,9 +5013,26 @@ server <- function(input, output, session) {
     plotly::ggplotly(p)
   })
 
-  output$dl_interventies <- downloadHandler(
-    filename = function() { paste("interventies-", Sys.Date(), ".csv", sep="") },
-    content = function(file) { write.csv2(data_interventies(), file, row.names = FALSE) }
+  data_interventies_export <- reactive({
+    df <- data_interventies()
+    if (nrow(df) == 0) return(df)
+    if (identical(input$int_jaar, "Beide")) {
+      df <- df |> dplyr::mutate(series = combine_series(died, cohort))
+    } else {
+      df <- df |> dplyr::mutate(series = as.character(died))
+    }
+    df
+  })
+
+  chart_data_downloads_server(
+    id = "iter1_int_dl",
+    data = data_interventies_export,
+    chart_type = "grouped_bar",
+    category_col = "name",
+    series_col = "series",
+    value_col = "waarde",
+    filename_prefix = "interventies",
+    agg_fun = NULL
   )
 
   # ==========================================
@@ -5224,14 +5678,78 @@ server <- function(input, output, session) {
     }
   )
 
-  output$dl_agg <- downloadHandler(
-    filename = function() {
-      paste0(
-        build_export_name("rvs_uitkomsten", active_agg_sheet(), input$agg_stat %||% "maat"),
-        ".xlsx"
+  agg_export_data <- reactive({
+    df <- filtered_agg()
+    req(nrow(df) > 0)
+
+    view <- input$agg_view
+    choices <- view_choices_for(agg_raw() |> dplyr::filter(name %in% selected_agg_names()))
+    if (is.null(view) || !view %in% choices) view <- choices[[1]]
+
+    split_col <- effective_agg_split()
+    has_split <- split_col != "none" && split_col %in% names(df)
+
+    df_plot <- df |>
+      dplyr::filter(!is.na(value_num)) |>
+      dplyr::mutate(
+        versie = dplyr::coalesce(as.character(versie), "Geobserveerd"),
+        outcome_label = pretty_metric_name(name, active_agg_sheet()),
+        split_value = if (has_split) as.character(.data[[split_col]]) else "Totaal",
+        split_label = if (has_split) pretty_value(split_col, split_value) else "Totaal",
+        population_value = dplyr::coalesce(if ("died" %in% names(df)) population_label(died) else "Totaal", "Totaal"),
+        cohort_value = if ("cohort" %in% names(df)) as.character(cohort) else ""
       )
-    },
-    content = function(file) writexl::write_xlsx(filtered_agg(), file)
+    req(nrow(df_plot) > 0)
+
+    if (identical(view, "maandelijks") && "t" %in% names(df_plot)) {
+      df_plot |>
+        dplyr::mutate(
+          line_base = dplyr::case_when(
+            has_split && dplyr::n_distinct(name) > 1 ~ paste(outcome_label, split_label, population_value, sep = " | "),
+            has_split ~ split_label,
+            dplyr::n_distinct(name) > 1 ~ paste(outcome_label, population_value, sep = " | "),
+            TRUE ~ population_value
+          ),
+          versie_label = dplyr::recode(versie, Geobserveerd = "Niet gecorrigeerd", Inflatiecorrectie = "Inflatiecorrectie", .default = versie),
+          series = if (dplyr::n_distinct(versie) > 1) paste(line_base, versie_label, sep = ", ") else line_base
+        ) |>
+        dplyr::transmute(
+          category = as.character(numericize(t)),
+          series = as.character(series),
+          export_value = value_num
+        )
+    } else if (has_split) {
+      df_plot |>
+        dplyr::group_by(name, outcome_label, split_value, split_label, population_value, versie) |>
+        dplyr::summarise(export_value = sum(value_num, na.rm = TRUE), .groups = "drop") |>
+        dplyr::transmute(
+          category = as.character(split_label),
+          series = combine_series(population_value, versie),
+          export_value = export_value
+        )
+    } else {
+      df_plot |>
+        dplyr::transmute(
+          category = as.character(outcome_label),
+          series = combine_series(population_value, versie, cohort_value),
+          export_value = value_num
+        )
+    }
+  })
+
+  agg_export_chart_type <- reactive({
+    if (identical(input$agg_view, "maandelijks")) "line" else "grouped_bar"
+  })
+
+  chart_data_downloads_server(
+    id = "iter2_agg_dl",
+    data = agg_export_data,
+    chart_type = agg_export_chart_type,
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "rvs_uitkomsten",
+    agg_fun = NULL
   )
 
   heatmap_available_splits <- reactive({
@@ -5481,20 +5999,15 @@ server <- function(input, output, session) {
     }
   )
 
-  output$dl_heatmap <- downloadHandler(
-    filename = function() {
-      paste0(
-        build_export_name(
-          "rvs_heatmap",
-          selected_hm_split(),
-          selected_hm_stat()
-        ),
-        ".xlsx"
-      )
-    },
-    content = function(file) {
-      writexl::write_xlsx(heatmap_display_data(), file)
-    }
+  chart_data_downloads_server(
+    id = "iter2_hm_dl",
+    data = heatmap_display_data,
+    chart_type = "scatter",
+    category_col = "name",
+    series_col = "name",
+    value_col = "value_num",
+    filename_prefix = "rvs_heatmap",
+    agg_fun = NULL
   )
 
   observe({
@@ -6099,11 +6612,6 @@ server <- function(input, output, session) {
     )
   })
 
-  output$dl_top <- downloadHandler(
-    filename = function() paste0("rvs_top_codes_", input$top_sheet, ".xlsx"),
-    content = function(file) writexl::write_xlsx(filtered_top(), file)
-  )
-
   output$dl_top_plot <- downloadHandler(
     filename = function() {
       paste0(
@@ -6119,6 +6627,28 @@ server <- function(input, output, session) {
     content = function(file) {
       save_plot_png(file, top_plot_obj())
     }
+  )
+
+  top_export_data <- reactive({
+    df <- top_butterfly_data()
+    if (nrow(df) == 0) return(df)
+    df |>
+      dplyr::transmute(
+        category = as.character(code_label),
+        series = as.character(groep_label),
+        export_value = waarde
+      )
+  })
+
+  chart_data_downloads_server(
+    id = "iter2_top_dl",
+    data = top_export_data,
+    chart_type = "bar",
+    category_col = "category",
+    series_col = "series",
+    value_col = "export_value",
+    filename_prefix = "rvs_top_codes",
+    agg_fun = NULL
   )
 }
 

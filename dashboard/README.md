@@ -8,7 +8,7 @@ Korte reminder om de app lokaal te starten.
 2. Run:
 
 ```r
-setwd("c:/Users/MarcoGriepAHTI/Git Repos/RVS_tool")
+setwd("dashboard")
 shiny::runApp("app.R")
 ```
 
@@ -28,3 +28,4 @@ shiny::runApp("app.R")
 ## Opmerking
 
 - Benodigde packages worden in `app.R` automatisch geïnstalleerd en geladen bij opstarten.
+- Think-cell export utilities staan in `utils/`; tests draaien met `testthat::test_dir("tests")` vanuit de `dashboard/` map.

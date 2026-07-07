@@ -18,6 +18,7 @@ jobs:
         mkdir -p deploy
         cp dashboard/app.R deploy/
         cp -r dashboard/data deploy/
+        cp -r dashboard/utils deploy/
         echo "Deploy contents:"
         find deploy -type f | sort
 
