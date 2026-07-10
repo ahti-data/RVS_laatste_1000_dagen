@@ -1,5 +1,6 @@
 # Project: Laatste 1000 dagen
 # Author: Stanislav Avdeev
+# for analysis 3: annual costs
 # Goal: Create data at the annual level (ZVW)
 # Output: Annual data
 # Last edited: 27 February 2026
