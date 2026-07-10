@@ -1705,6 +1705,10 @@ it3_cost_agg_by_iter <- list(
   "3d" = safe_read_iteration3_cost_agg(
     resolve_iteration3_subfile("iteration_3d", "cost_aggregations.xlsx"),
     "cost_agg_3d"
+  ),
+  "3e" = safe_read_iteration3_cost_agg(
+    resolve_iteration3_subfile("iteration_3e", "cost_aggregations.xlsx"),
+    "cost_agg_3e"
   )
 )
 it3_regression_by_iter <- list(
@@ -2266,7 +2270,7 @@ ui <- navbarPage(
             selectInput(
               "it3_cost_iter",
               "Select iteration data",
-              choices = c("3c" = "3c", "3d" = "3d"),
+              choices = c("3c" = "3c", "3d" = "3d", "3e" = "3e"),
               selected = "3c"
             ),
             selectInput("it3_cost_dataset", "Dataset", choices = NULL),
