@@ -40,8 +40,11 @@ tc_chart_types_transposed <- function() {
 #' @param series_order Optional character vector to fix series row order.
 #' @param waterfall_end_col Optional category name for waterfall end total (`e`).
 #' @param waterfall_subtotal_cols Optional category names for waterfall subtotals (`t`).
+#' @param facet_col Optional column used by `facet_wrap()` / `facet_grid()`. When
+#'   set, returns a named list of matrices (one per facet level) for multi-sheet export.
 #'
-#' @return Tibble ready for Excel export. Cell A1 is empty (first column header `""`).
+#' @return Tibble ready for Excel export, or a named list of tibbles when `facet_col`
+#'   is set. Cell A1 is empty (first column header `""`).
 format_tc_data <- function(
     df,
     chart_type = "line",
@@ -52,7 +55,8 @@ format_tc_data <- function(
     category_order = NULL,
     series_order = NULL,
     waterfall_end_col = NULL,
-    waterfall_subtotal_cols = NULL
+    waterfall_subtotal_cols = NULL,
+    facet_col = NULL
 ) {
   chart_type <- normalize_tc_chart_type(chart_type)
 
@@ -63,7 +67,33 @@ format_tc_data <- function(
     )
   }
 
-  validate_tc_columns(df, category_col, series_col, value_col)
+  validate_tc_columns(df, category_col, series_col, value_col, facet_col = facet_col)
+
+  if (!is.null(facet_col)) {
+    facet_levels <- tc_facet_levels(df[[facet_col]])
+    tc_by_facet <- stats::setNames(
+      lapply(facet_levels, function(facet_level) {
+        facet_df <- df[df[[facet_col]] == facet_level, , drop = FALSE]
+        format_tc_data(
+          df = facet_df,
+          chart_type = chart_type,
+          category_col = category_col,
+          series_col = series_col,
+          value_col = value_col,
+          agg_fun = agg_fun,
+          category_order = category_order,
+          series_order = series_order,
+          waterfall_end_col = waterfall_end_col,
+          waterfall_subtotal_cols = waterfall_subtotal_cols,
+          facet_col = NULL
+        )
+      }),
+      facet_levels
+    )
+
+    names(tc_by_facet) <- sanitize_excel_sheet_names(names(tc_by_facet))
+    return(tc_by_facet)
+  }
 
   if (chart_type == "waterfall") {
     return(format_tc_waterfall(
@@ -105,11 +135,17 @@ format_tc_data <- function(
 
 #' Write a data frame or matrix to an Excel workbook.
 #'
-#' @param data Data frame or matrix.
+#' @param data Data frame, matrix, or named list of data frames (one sheet each).
 #' @param path Output `.xlsx` path.
 write_tc_xlsx <- function(data, path) {
   if (!requireNamespace("writexl", quietly = TRUE)) {
     stop("Package 'writexl' is required. Install it with install.packages('writexl').")
+  }
+
+  if (is_tc_workbook_list(data)) {
+    sheets <- lapply(data, as.data.frame)
+    writexl::write_xlsx(sheets, path)
+    return(invisible(path))
   }
 
   writexl::write_xlsx(as.data.frame(data), path)
@@ -125,11 +161,68 @@ normalize_tc_chart_type <- function(chart_type) {
   )
 }
 
-validate_tc_columns <- function(df, category_col, series_col, value_col) {
-  missing_cols <- setdiff(c(category_col, series_col, value_col), names(df))
+validate_tc_columns <- function(
+    df,
+    category_col,
+    series_col,
+    value_col,
+    facet_col = NULL
+) {
+  required_cols <- c(category_col, series_col, value_col, facet_col)
+  required_cols <- required_cols[!is.null(required_cols)]
+  missing_cols <- setdiff(required_cols, names(df))
   if (length(missing_cols) > 0) {
     stop("Missing columns in data: ", paste(missing_cols, collapse = ", "))
   }
+}
+
+is_tc_workbook_list <- function(data) {
+  is.list(data) &&
+    !is.data.frame(data) &&
+    length(data) > 0 &&
+    !is.null(names(data)) &&
+    all(vapply(data, function(x) is.data.frame(x) || is.matrix(x), logical(1)))
+}
+
+tc_facet_levels <- function(facet_values) {
+  if (is.factor(facet_values)) {
+    present_levels <- levels(facet_values)[levels(facet_values) %in% facet_values]
+    return(present_levels)
+  }
+
+  unique(facet_values)
+}
+
+sanitize_excel_sheet_name <- function(name) {
+  name <- as.character(name)
+  name <- gsub("[\\\\/:?*\\[\\]]", "_", name)
+  name <- substr(name, 1, 31)
+  if (!nzchar(name)) {
+    return("sheet")
+  }
+  name
+}
+
+sanitize_excel_sheet_names <- function(names) {
+  sanitized <- vapply(names, sanitize_excel_sheet_name, character(1))
+
+  if (!any(duplicated(sanitized))) {
+    return(unname(sanitized))
+  }
+
+  seen <- character(0)
+  vapply(seq_along(sanitized), function(i) {
+  name <- sanitized[[i]]
+  count <- sum(seen == name) + 1L
+  seen <<- c(seen, name)
+  if (count == 1L) {
+    return(name)
+  }
+
+  suffix <- paste0("_", count)
+  base <- substr(name, 1, max(1L, 31L - nchar(suffix)))
+  paste0(base, suffix)
+  }, character(1))
 }
 
 prepare_tc_long_data <- function(

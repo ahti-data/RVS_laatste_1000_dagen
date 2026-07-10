@@ -1,10 +1,6 @@
 ---
-description: Standardize think-cell data exports from Shiny dashboard charts
-globs:
-  - app.R
-  - utils/**/*.R
-  - "**/modules/**/*.R"
-alwaysApply: false
+name: thinkcell-export
+description: Standardize think-cell data exports from Shiny dashboard charts. Use when adding or editing a chart (in dashboard/app.R or dashboard/utils/**/*.R) that has, or should have, download buttons.
 ---
 
 # Think-cell chart data exports
@@ -18,7 +14,7 @@ Every chart that supports export must offer:
 1. **Download data (raw)** — the exact data frame used to build the ggplot, written as `.xlsx` without reshaping.
 2. **Download data (think-cell)** — the same data passed through `format_tc_data()`, written as `.xlsx`.
 
-Use `chart_data_downloads_ui()` and `chart_data_downloads_server()` from `utils/chart_downloads.R`.
+Use `chart_data_downloads_ui()` and `chart_data_downloads_server()` from `dashboard/utils/chart_downloads.R`.
 
 The think-cell button is shown only when `chart_type` is in `TC_SUPPORTED_CHART_TYPES`:
 
@@ -28,7 +24,7 @@ The think-cell button is shown only when `chart_type` is in `TC_SUPPORTED_CHART_
 - `grouped_bar`
 - `waterfall`
 
-If a chart does not match one of these types, wire only the raw download (or omit think-cell export until the chart type is added to `format_thinkcell_download.R`).
+If a chart does not match one of these types, wire only the raw download (or omit think-cell export until the chart type is added to `dashboard/utils/format_thinkcell_download.R`).
 
 ## ggplot to export column mapping
 
@@ -47,10 +43,10 @@ Set `chart_type` explicitly to match the think-cell chart the PM will build in P
 
 ## Rules
 
-- Never hand-roll `pivot_wider()` for think-cell exports in `app.R` or modules.
+- Never hand-roll `pivot_wider()` for think-cell exports in `dashboard/app.R`.
 - Pass the same reactive/filtered data to both the plot and the download handlers.
 - Prefer `agg_fun = NULL` when the plot data is already aggregated.
-- Add new chart types in `utils/format_thinkcell_download.R` with tests before exposing the think-cell button.
+- Add new chart types in `dashboard/utils/format_thinkcell_download.R` with tests before exposing the think-cell button.
 
 ## Example wiring
 

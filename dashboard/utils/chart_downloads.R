@@ -54,6 +54,7 @@ chart_data_downloads_ui <- function(
 #' @param agg_fun Aggregation function passed to [format_tc_data()].
 #' @param category_order,series_order Optional order vectors for think-cell export.
 #' @param waterfall_end_col,waterfall_subtotal_cols Optional waterfall markers.
+#' @param facet_col Optional facet column for `facet_wrap()` / `facet_grid()` plots.
 chart_data_downloads_server <- function(
     id,
     data,
@@ -66,7 +67,8 @@ chart_data_downloads_server <- function(
     category_order = NULL,
     series_order = NULL,
     waterfall_end_col = NULL,
-    waterfall_subtotal_cols = NULL
+    waterfall_subtotal_cols = NULL,
+    facet_col = NULL
 ) {
   shiny::moduleServer(id, function(input, output, session) {
     output$raw <- shiny::downloadHandler(
@@ -105,7 +107,8 @@ chart_data_downloads_server <- function(
             category_order = category_order,
             series_order = series_order,
             waterfall_end_col = waterfall_end_col,
-            waterfall_subtotal_cols = waterfall_subtotal_cols
+            waterfall_subtotal_cols = waterfall_subtotal_cols,
+            facet_col = facet_col
           )
           write_tc_xlsx(tc_data, file)
         }

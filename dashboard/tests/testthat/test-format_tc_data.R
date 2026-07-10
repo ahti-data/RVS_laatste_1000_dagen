@@ -99,3 +99,55 @@ test_that("unsupported chart types error", {
     "Unsupported think-cell chart type"
   )
 })
+
+test_that("facet export returns one matrix per facet level", {
+  df <- data.frame(
+    region = rep(c("North", "South"), each = 4),
+    quarter = rep(rep(c("Q1", "Q2"), each = 2), 2),
+    product = rep(c("A", "B"), 4),
+    revenue = c(10, 20, 30, 40, 11, 21, 31, 41)
+  )
+
+  result <- format_tc_data(
+    df,
+    chart_type = "line",
+    category_col = "quarter",
+    series_col = "product",
+    value_col = "revenue",
+    facet_col = "region",
+    agg_fun = NULL
+  )
+
+  expect_type(result, "list")
+  expect_named(result, c("North", "South"))
+  expect_equal(as.character(result$North[1, 2:3]), c("10", "30"))
+  expect_equal(as.character(result$South[2, 3]), "41")
+})
+
+test_that("facet export writes multi-sheet workbook", {
+  skip_if_not_installed("writexl")
+
+  df <- data.frame(
+    region = rep(c("North", "South"), each = 4),
+    quarter = rep(rep(c("Q1", "Q2"), each = 2), 2),
+    product = rep(c("A", "B"), 4),
+    revenue = c(10, 20, 30, 40, 11, 21, 31, 41)
+  )
+
+  tc_data <- format_tc_data(
+    df,
+    chart_type = "line",
+    category_col = "quarter",
+    series_col = "product",
+    value_col = "revenue",
+    facet_col = "region",
+    agg_fun = NULL
+  )
+
+  path <- tempfile(fileext = ".xlsx")
+  on.exit(unlink(path), add = TRUE)
+  write_tc_xlsx(tc_data, path)
+
+  expect_true(file.exists(path))
+  expect_gt(file.info(path)$size, 0)
+})
