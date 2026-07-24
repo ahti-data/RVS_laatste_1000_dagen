@@ -193,6 +193,12 @@ favorites_capture <- function(
     template_name   = if (!is.na(template_path)) basename(template_path) else NA_character_,
     selections      = selections,
     slide_order     = slide_order,
+    # slide_block embeds an *absolute* template path, only valid for rendering
+    # on this same machine (see favorites_build_deck_zip()). slide_title/
+    # figure_title are kept separately so a portable block -- referencing the
+    # template by bare file name -- can be rebuilt for the shipped fallback.
+    slide_title     = effective_slide_title,
+    figure_title    = tc_or(figure_title, ""),
     slide_block     = slide_block,
     tc_table        = favorites_table_to_storage(slide_matrix)
   )
@@ -249,7 +255,19 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
       }
 
       if (!rendered) {
-        writeLines(ppttc_json, file.path(work, "favorites_deck.ppttc"), useBytes = TRUE)
+        # The captured slide_block embeds an *absolute* template path -- only
+        # valid on the machine that built it (see the matching note in
+        # tc_build_slide_zip()). The shipped .ppttc must instead reference each
+        # template by the bare file name it's copied under below, so rebuild a
+        # portable block per favorite rather than reusing slide_block as-is.
+        portable_blocks <- vapply(renderable, function(e) {
+          tc_build_ppttc_slide_block(
+            favorites_table_as_df(e$tc_table), tc_or(e$template_name, ""),
+            tc_or(e$slide_title, ""), tc_or(e$figure_title, "")
+          )
+        }, character(1))
+        portable_json <- sprintf("[%s]", paste(portable_blocks, collapse = ","))
+        writeLines(portable_json, file.path(work, "favorites_deck.ppttc"), useBytes = TRUE)
         templates_used <- unique(Filter(nzchar, stats::na.omit(
           vapply(renderable, function(e) tc_or(e$template_name, NA_character_), character(1))
         )))

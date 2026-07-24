@@ -714,8 +714,15 @@ tc_build_slide_zip <- function(zip_path,
 
     if (!rendered) {
       # Graceful, never-corrupt fallback: ship the valid template + ppttc data.
+      # The shipped .ppttc must reference the template by the bare file name it's
+      # copied under here, NOT the absolute path resolved above -- that path is
+      # only valid on *this* machine (typically the Linux server, which is why
+      # rendering fell back in the first place). A PM opening this bundle on
+      # their own PC has no such path; think-cell needs "slide_template.pptx"
+      # sitting right next to chart_data.ppttc, not a server path it can't reach.
       file.copy(template_path, file.path(work, "slide_template.pptx"), overwrite = TRUE)
-      writeLines(json, file.path(work, "chart_data.ppttc"), useBytes = TRUE)
+      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title)
+      writeLines(portable_json, file.path(work, "chart_data.ppttc"), useBytes = TRUE)
       writeLines(paste0(
         "think-cell was not available to render the slide automatically on this machine.\n",
         "To finish the slide on a PC with PowerPoint + think-cell:\n\n",

@@ -114,6 +114,28 @@ test_that("supported chart without think-cell ships template + ppttc fallback", 
   expect_true("log.txt" %in% files)
 })
 
+test_that("the fallback .ppttc references the co-located template, not the absolute path used to resolve it", {
+  # Regression test: the shipped chart_data.ppttc must be portable to a
+  # different machine, so it must reference "slide_template.pptx" (the file
+  # copied alongside it) rather than the absolute path this machine resolved
+  # the template to (which is meaningless -- or worse, silently wrong -- on
+  # whatever PC opens the bundle).
+  skip_if_not(have_templates, "templates directory not available")
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "line",
+    filename_prefix = "portable_check", templates_dir = templates_dir,
+    ppttc_exe = NA, write_table_fun = stub_writer
+  )
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
+
+  expect_true(grepl('"template":"slide_template.pptx"', ppttc, fixed = TRUE))
+  resolved_path <- tc_template_for_chart_type("line", templates_dir = templates_dir)
+  expect_false(grepl(resolved_path, ppttc, fixed = TRUE))
+})
+
 test_that("options log is scoped to the active chart via prefix map", {
   skip_if_not(requireNamespace("shiny", quietly = TRUE))
   rv <- shiny::reactiveValues(

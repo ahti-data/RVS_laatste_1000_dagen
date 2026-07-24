@@ -173,6 +173,34 @@ test_that("deck ZIP falls back to template + combined .ppttc when no renderer is
   expect_true("log.txt" %in% files)
 })
 
+test_that("the fallback deck .ppttc references co-located templates, not the absolute capture-time path", {
+  # Regression test for the same bug class as tc_build_slide_zip(): the
+  # slide_block captured at star-time embeds an absolute template path valid
+  # only on the machine that captured it. The shipped favorites_deck.ppttc
+  # must instead reference each template by the bare file name copied
+  # alongside it.
+  skip_if_not(have_templates, "templates directory not available")
+  z <- tempfile(fileext = ".zip")
+  entry <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  # Sanity check on the "before" state: the captured block embeds a full
+  # (short-)path, not just the bare template file name.
+  captured_template_value <- sub('.*"template":"([^"]*)".*', "\\1", entry$slide_block)
+  expect_gt(nchar(captured_template_value), nchar(entry$template_name))
+
+  favorites_build_deck_zip(z, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  ppttc <- paste(readLines(file.path(extract_dir, "favorites_deck.ppttc")), collapse = "\n")
+
+  expect_true(grepl(sprintf('"template":"%s"', entry$template_name), ppttc, fixed = TRUE))
+  expect_false(grepl(captured_template_value, ppttc, fixed = TRUE))
+})
+
 test_that("a working ppttc executable renders one combined deck for multiple favorites", {
   skip_if_not(have_templates, "templates directory not available")
   skip_on_os("windows")  # stub is a POSIX shell script
