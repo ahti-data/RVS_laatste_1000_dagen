@@ -1,1 +1,6 @@
 ~$*.xlsx
+
+# Runtime state - never committed; deploy workflow never syncs these either,
+# so local testing artifacts and uploaded content stay out of git either way.
+/state/
+/templates/custom/

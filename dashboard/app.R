@@ -23,7 +23,8 @@ packages <- c(
   "DT",
   "stringr",
   "scales",
-  "sf"
+  "sf",
+  "jsonlite"
 )
 
 # Identify packages that are not yet installed
@@ -102,6 +103,9 @@ source_util <- function(rel_path) {
 }
 
 source_util("utils/format_thinkcell_download.R")
+source_util("utils/slide_download.R")
+source_util("utils/template_admin.R")
+source_util("utils/favorites.R")
 source_util("utils/chart_downloads.R")
 source_util("data/metadata/brand_colors.R")
 
@@ -2406,7 +2410,10 @@ ui <- navbarPage(
         )
       )
     )
-  )
+  ),
+
+  tabPanel("Favorites", br(), favorites_panel_ui("favorites")),
+  tabPanel("Manage templates", br(), template_admin_ui("template_admin"))
 )
 
 # ===== SERVER DEFINITION =====
@@ -6654,6 +6661,9 @@ server <- function(input, output, session) {
     filename_prefix = "rvs_top_codes",
     agg_fun = NULL
   )
+
+  favorites_panel_server("favorites")
+  template_admin_server("template_admin")
 }
 
 # Run the app (Using your existing wrapper)
