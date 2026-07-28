@@ -45,11 +45,34 @@ Set `chart_type` explicitly to match the think-cell chart the PM will build in P
 - `bar`, `stacked_bar`, `grouped_bar` → bar orientation (transposed matrix)
 - `stacked_bar` vs `grouped_bar` → same Excel layout; stacking is configured in think-cell
 
+## Preserving the plotted bar/category order
+
+The exported Excel matrix must show categories (and series) in the **same order the
+chart plots them**, not alphabetically. `format_tc_data()` decides the order like this:
+
+1. Explicit `category_order` / `series_order` argument (a character vector) — always wins.
+2. Otherwise, if the column is a **factor**, its `levels()` are used — and because ggplot
+   also draws bars in factor-level order, this makes the export match the figure for free.
+3. Otherwise: numeric columns sort ascending; plain character columns fall back to
+   alphabetical (the case to avoid).
+
+So whenever a chart orders its axis deliberately (by value, by a custom sequence, reverse
+chronological, …), **give the download the same ordering you give ggplot**:
+
+- Preferred: pass the *already factor-ordered* data to both the plot and
+  `chart_data_downloads_server()` (e.g. `mutate(quarter = factor(quarter, levels = my_order))`
+  upstream, so plot and export share one source of truth), **or**
+- pass `category_order = my_order` / `series_order = my_order` explicitly to the download server.
+
+Never rely on the default alphabetical order for a chart whose bars are intentionally ordered.
+
 ## Rules
 
 - Never hand-roll `pivot_wider()` for think-cell exports in `app.R` or modules.
 - Pass the same reactive/filtered data to both the plot and the download handlers.
 - Prefer `agg_fun = NULL` when the plot data is already aggregated.
+- Keep the plotted order: pass factor-ordered data or `category_order`/`series_order` (see
+  "Preserving the plotted bar/category order" above).
 - Add new chart types in `utils/format_thinkcell_download.R` with tests before exposing the think-cell button.
 
 ## Example wiring

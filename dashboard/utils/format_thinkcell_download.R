@@ -234,6 +234,19 @@ prepare_tc_long_data <- function(
     category_order = NULL,
     series_order = NULL
 ) {
+  # Preserve the plotted bar order in the exported Excel matrix. A caller can
+  # fix the order two ways: pass category_order/series_order explicitly, OR
+  # hand us the same factor-ordered columns it gives ggplot (ggplot draws bars
+  # in factor-level order). When no explicit order is given, inherit the
+  # factor's levels so the matrix matches the figure instead of falling back to
+  # alphabetical. Explicit orders still win.
+  if (is.null(category_order) && is.factor(df[[category_col]])) {
+    category_order <- levels(df[[category_col]])
+  }
+  if (is.null(series_order) && is.factor(df[[series_col]])) {
+    series_order <- levels(df[[series_col]])
+  }
+
   df_clean <- df %>%
     dplyr::select(
       dplyr::all_of(c(category_col, series_col, value_col))
