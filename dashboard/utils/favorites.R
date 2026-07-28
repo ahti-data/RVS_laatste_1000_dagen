@@ -317,6 +317,32 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
   invisible(zip_path_abs)
 }
 
+#' Compact, single-line rendering of a favorite's option selections for the
+#' Favorites list (the multi-line [tc_format_selections()] is for the log).
+#'
+#' Drops empty values, joins each option as `name: value`, and truncates the
+#' whole string so a chart with many options doesn't blow up the row.
+#' @param selections Named list of option selections (as stored on a favorite).
+#' @param max_chars Soft cap on the returned string length.
+#' @return A single string, or "" when there is nothing to show.
+favorites_selections_inline <- function(selections, max_chars = 160) {
+  if (is.null(selections) || length(selections) == 0) return("")
+  nm <- names(selections)
+  if (is.null(nm)) nm <- paste0("option_", seq_along(selections))
+  parts <- vapply(seq_along(selections), function(i) {
+    v <- selections[[i]]
+    if (is.null(v) || length(v) == 0) return("")
+    v <- paste(as.character(v), collapse = ", ")
+    if (!nzchar(trimws(v))) return("")
+    sprintf("%s: %s", nm[[i]], v)
+  }, character(1))
+  parts <- parts[nzchar(parts)]
+  if (length(parts) == 0) return("")
+  out <- paste(parts, collapse = " · ")
+  if (nchar(out) > max_chars) out <- paste0(substr(out, 1, max_chars - 1), "…")
+  out
+}
+
 #' UI for the shared "Favorites" tab: the saved list plus a combined download.
 #' @param id Module id.
 favorites_panel_ui <- function(id) {
@@ -357,18 +383,33 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000) {
                              "No favorites saved yet. Star a chart to add one."))
       }
       rows <- lapply(entries, function(e) {
+        breadcrumb <- paste(
+          Filter(nzchar, c(e$dashboard_title, e$tab_label, e$subtab_label)),
+          collapse = " / "
+        )
+        options_line <- favorites_selections_inline(e$selections)
+        details <- shiny::tagList(
+          if (nzchar(breadcrumb)) shiny::tags$div(
+            style = "font-size:12px; color:#6B7280;", breadcrumb
+          ),
+          if (nzchar(tc_or(e$chart_type, ""))) shiny::tags$div(
+            style = "font-size:11px; color:#9CA3AF;",
+            paste0("Chart: ", e$chart_type)
+          ),
+          if (nzchar(options_line)) shiny::tags$div(
+            style = "font-size:11px; color:#6B7280; margin-top:2px;",
+            shiny::tags$span(style = "color:#9CA3AF;", "Options: "),
+            options_line
+          )
+        )
         shiny::tags$div(
           style = paste(
-            "display:flex; justify-content:space-between; align-items:center;",
-            "padding:8px 0; border-bottom:1px solid #eee;"
+            "display:flex; justify-content:space-between; align-items:flex-start;",
+            "gap:12px; padding:8px 0; border-bottom:1px solid #eee;"
           ),
           shiny::tags$div(
             shiny::tags$strong(tc_or(e$label, "(untitled)")),
-            shiny::tags$div(
-              style = "font-size:12px; color:#6B7280;",
-              paste(Filter(nzchar, c(e$dashboard_title, e$tab_label, e$subtab_label)),
-                    collapse = " / ")
-            )
+            details
           ),
           shiny::actionButton(session$ns(paste0("remove_", e$id)), "Remove",
                               class = "btn-default btn-sm")

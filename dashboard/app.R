@@ -2418,7 +2418,22 @@ ui <- navbarPage(
 
 # ===== SERVER DEFINITION =====
 server <- function(input, output, session) {
-  
+
+  # Register this app's context so the think-cell slide export log and the
+  # Favorites list can label each export with the dashboard name, the active
+  # tab / sub-tab, and a snapshot of the user's option selections. Without this
+  # call tc_ctx_*() returns empty strings and the log shows "(none captured)".
+  tc_register_app_context(
+    input,
+    dashboard_title = "Laatste 1000 dagen",
+    nav_id          = "main_nav",
+    subtab_by_tab   = c(
+      "Iteratie 1" = "iter1_tabs",
+      "Iteratie 2" = "iter2_tabs",
+      "Iteratie 3" = "iter3_tabs"
+    )
+  )
+
   error_log <- reactiveVal(character())
   add_error <- function(msg) {
     log_msg(msg)

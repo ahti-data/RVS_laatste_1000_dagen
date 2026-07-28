@@ -98,6 +98,25 @@ test_that("favorites_capture has no slide block when no template matches", {
   expect_null(entry$slide_block)
 })
 
+test_that("favorites_selections_inline renders a compact, truncated one-liner", {
+  expect_equal(favorites_selections_inline(NULL), "")
+  expect_equal(favorites_selections_inline(list()), "")
+  # empty values are dropped
+  expect_equal(
+    favorites_selections_inline(list(jaar = "2023", leeg = "", pop = character(0))),
+    "jaar: 2023"
+  )
+  # multiple options joined; multi-value collapsed
+  expect_equal(
+    favorites_selections_inline(list(jaar = "2023", groep = c("A", "B"))),
+    paste0("jaar: 2023 ", intToUtf8(0x00B7), " groep: A, B")
+  )
+  # long strings are truncated with an ellipsis
+  long <- favorites_selections_inline(list(x = paste(rep("y", 300), collapse = "")), max_chars = 20)
+  expect_true(nchar(long) <= 20)
+  expect_equal(substr(long, nchar(long), nchar(long)), intToUtf8(0x2026))
+})
+
 test_that("favorites_table_as_df passes a live data.frame through unchanged", {
   df <- sample_df()
   expect_identical(favorites_table_as_df(df), df)
