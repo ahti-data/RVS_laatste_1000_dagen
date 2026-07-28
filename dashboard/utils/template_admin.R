@@ -62,6 +62,49 @@ tmpl_save_upload <- function(tmp_path, original_name, templates_dir = NULL) {
   list(ok = TRUE, message = sprintf("Uploaded '%s'.", filename), filename = filename)
 }
 
+#' Bundle every currently available template into one `.zip` so someone can
+#' download a base template, edit it in PowerPoint, and re-upload it.
+#'
+#' Includes the built-in `templates/` set plus any uploaded overrides in
+#' `templates/custom/` (deduplicated by name, the custom copy winning — the
+#' same effective set [tc_list_templates()] shows), so what you download is
+#' exactly what the dashboard would use. Always produces a valid `.zip`; if no
+#' templates are found it contains a short README instead.
+#' @param zip_path Output `.zip` path (the `file` from a downloadHandler).
+#' @param templates_dir Optional base templates directory override.
+#' @return `zip_path` (invisibly).
+tmpl_build_templates_zip <- function(zip_path, templates_dir = NULL) {
+  work <- tempfile("templates_dl_")
+  dir.create(work)
+  old_wd <- getwd()
+  on.exit({
+    setwd(old_wd)
+    unlink(work, recursive = TRUE, force = TRUE)
+  }, add = TRUE)
+
+  files <- tc_list_templates(templates_dir)
+  copied <- character(0)
+  for (f in files) {
+    src <- tc_resolve_template_path(f, templates_dir)
+    if (!is.na(src)) {
+      file.copy(src, file.path(work, f), overwrite = TRUE)
+      copied <- c(copied, f)
+    }
+  }
+  if (length(copied) == 0) {
+    writeLines(
+      "No slide templates were found to download.",
+      file.path(work, "README.txt")
+    )
+  }
+
+  zip_files <- basename(list.files(work, full.names = TRUE))
+  zip_path_abs <- normalizePath(zip_path, winslash = "/", mustWork = FALSE)
+  setwd(work)
+  utils::zip(zipfile = zip_path_abs, files = zip_files, flags = "-q -X")
+  invisible(zip_path_abs)
+}
+
 #' UI for the template management panel.
 #' @param id Module id.
 template_admin_ui <- function(id) {
@@ -76,6 +119,13 @@ template_admin_ui <- function(id) {
     shiny::fileInput(ns("upload"), "Upload a .pptx template", accept = ".pptx"),
     shiny::uiOutput(ns("status")),
     shiny::h5("Available templates"),
+    shiny::p(
+      class = "text-muted",
+      "Download the current templates to edit a base template, then upload your ",
+      "edited copy above (same file name to replace it, a new name to add it)."
+    ),
+    shiny::downloadButton(ns("download_templates"), "Download templates (.zip)",
+                          class = "btn-default"),
     shiny::tableOutput(ns("template_list"))
   )
 }
@@ -105,6 +155,13 @@ template_admin_server <- function(id, templates_dir = NULL) {
       cls <- if (isTRUE(status_rv$ok)) "text-success" else "text-danger"
       shiny::tags$p(class = cls, status_rv$message)
     })
+
+    output$download_templates <- shiny::downloadHandler(
+      filename = function() paste0("slide_templates_", Sys.Date(), ".zip"),
+      content = function(file) {
+        tmpl_build_templates_zip(file, templates_dir)
+      }
+    )
 
     output$template_list <- shiny::renderTable({
       refresh_trigger()

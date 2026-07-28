@@ -69,3 +69,30 @@ test_that("uploads survive being listed even when no custom dir exists yet", {
   writeLines("builtin", file.path(templates_dir, "only_builtin.pptx"))
   expect_equal(tc_list_templates(templates_dir), "only_builtin.pptx")
 })
+
+test_that("tmpl_build_templates_zip bundles the effective template set", {
+  skip_if_not(nzchar(Sys.which("zip")), "system zip not available")
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  make_fake_pptx(file.path(templates_dir, "template_line.pptx"))
+  make_fake_pptx(file.path(templates_dir, "template_v_bar.pptx"))
+  # a custom override of one built-in, to prove the custom copy wins
+  dir.create(file.path(templates_dir, "custom"))
+  make_fake_pptx(file.path(templates_dir, "custom", "template_v_bar.pptx"))
+
+  z <- tempfile(fileext = ".zip")
+  tmpl_build_templates_zip(z, templates_dir)
+  files <- utils::unzip(z, list = TRUE)$Name
+
+  expect_setequal(files, c("template_line.pptx", "template_v_bar.pptx"))
+})
+
+test_that("tmpl_build_templates_zip still produces a valid zip when empty", {
+  skip_if_not(nzchar(Sys.which("zip")), "system zip not available")
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  z <- tempfile(fileext = ".zip")
+  tmpl_build_templates_zip(z, templates_dir)
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("README.txt" %in% files)
+})
