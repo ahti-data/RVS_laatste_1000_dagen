@@ -41,6 +41,21 @@ test_that("uploads are rejected when not a .pptx or not zip-signed", {
   expect_false(res2$ok)
 })
 
+test_that("a failed write is reported as an error, not a false success", {
+  # Point the templates dir at a *file*, so the templates/custom/ subdir can't
+  # be created -- standing in for a non-writable directory on the server.
+  fake_templates <- tempfile(fileext = ".notadir")
+  writeLines("x", fake_templates)
+
+  tmp_upload <- tempfile(fileext = ".pptx")
+  make_fake_pptx(tmp_upload)
+
+  res <- tmpl_save_upload(tmp_upload, "team_deck.pptx", fake_templates)
+  expect_false(res$ok)
+  expect_true(is.na(res$filename))
+  expect_match(res$message, "write access|writable|Could not")
+})
+
 test_that("a valid upload lands in templates/custom/ and is listed with precedence", {
   templates_dir <- tempfile("templates_")
   dir.create(templates_dir)

@@ -53,11 +53,27 @@ tmpl_save_upload <- function(tmp_path, original_name, templates_dir = NULL) {
     return(list(ok = FALSE, message = "Could not resolve a templates/ directory to upload into.",
                 filename = NA_character_))
   }
-  if (!dir.exists(custom_dir)) dir.create(custom_dir, recursive = TRUE)
+  if (!dir.exists(custom_dir)) {
+    dir.create(custom_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  # The uploads directory is created at runtime under templates/, which on a
+  # deployed server may not be writable by the Shiny process. Detect that here
+  # instead of reporting a false "Uploaded" (the copy below would silently fail
+  # and the template would never appear in the list).
+  if (!dir.exists(custom_dir)) {
+    return(list(ok = FALSE, filename = NA_character_, message = sprintf(
+      "Could not create the uploads folder '%s'. The app may not have write access there.",
+      custom_dir)))
+  }
 
   filename <- tmpl_sanitize_filename(original_name)
   dest <- file.path(custom_dir, filename)
-  file.copy(tmp_path, dest, overwrite = TRUE)
+  copied <- file.copy(tmp_path, dest, overwrite = TRUE)
+  if (!isTRUE(copied) || !file.exists(dest)) {
+    return(list(ok = FALSE, filename = NA_character_, message = sprintf(
+      "Could not save the upload to '%s'. The folder may not be writable by the app.",
+      dest)))
+  }
 
   list(ok = TRUE, message = sprintf("Uploaded '%s'.", filename), filename = filename)
 }

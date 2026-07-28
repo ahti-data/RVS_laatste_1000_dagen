@@ -135,6 +135,35 @@ chart_data_downloads_server <- function(
       if (nzchar(ui_choice)) ui_choice else resolve_opt(template_override)
     }
 
+    # The "Slide template" dropdown's choices are fixed when the UI is built, so
+    # a template uploaded at runtime (Manage-templates tab) wouldn't show up
+    # without a page reload. Poll the templates dir and refresh the choices when
+    # it changes, preserving the user's current selection.
+    slide_ui_present <- if (shiny::is.reactive(chart_type)) TRUE else tc_template_available(chart_type)
+    if (slide_ui_present) {
+      template_choices_poll <- shiny::reactivePoll(
+        5000, session,
+        checkFunc = function() {
+          d <- tc_find_templates_dir()
+          if (is.null(d) || is.na(d)) return("")
+          cd <- file.path(d, "custom")
+          paste(
+            if (dir.exists(d))  as.character(file.info(d)$mtime)  else "",
+            if (dir.exists(cd)) as.character(file.info(cd)$mtime) else "",
+            sep = "|"
+          )
+        },
+        valueFunc = function() tc_template_choices()
+      )
+      shiny::observeEvent(template_choices_poll(), {
+        choices  <- template_choices_poll()
+        current  <- shiny::isolate(input$slide_template_choice)
+        selected <- if (!is.null(current) && current %in% choices) current else ""
+        shiny::updateSelectInput(session, "slide_template_choice",
+                                 choices = choices, selected = selected)
+      }, ignoreInit = TRUE)
+    }
+
     slide_chosen_template <- shiny::reactive({
       override <- slide_effective_override()
       if (nzchar(override)) {
