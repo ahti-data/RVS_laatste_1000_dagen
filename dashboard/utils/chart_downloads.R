@@ -144,12 +144,11 @@ chart_data_downloads_server <- function(
       template_choices_poll <- shiny::reactivePoll(
         5000, session,
         checkFunc = function() {
-          d <- tc_find_templates_dir()
-          if (is.null(d) || is.na(d)) return("")
-          cd <- file.path(d, "custom")
+          d  <- tc_find_templates_dir()      # built-in templates
+          cd <- tc_custom_templates_dir()    # runtime uploads (state/template_uploads)
           paste(
-            if (dir.exists(d))  as.character(file.info(d)$mtime)  else "",
-            if (dir.exists(cd)) as.character(file.info(cd)$mtime) else "",
+            if (!is.null(d)  && !is.na(d)  && dir.exists(d))  as.character(file.info(d)$mtime)  else "",
+            if (!is.null(cd) && !is.na(cd) && dir.exists(cd)) as.character(file.info(cd)$mtime) else "",
             sep = "|"
           )
         },

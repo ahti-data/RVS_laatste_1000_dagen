@@ -1,9 +1,10 @@
 #' Template management UI, decoupled from git deploys.
 #'
 #' Lets someone add a new think-cell `.pptx` template without a developer
-#' committing it to the repo. Uploads are written to `templates/custom/`,
-#' which the deploy workflow never syncs (see CLAUDE.md), so they survive a
-#' redeploy automatically. Reuses the existing template resolution logic in
+#' committing it to the repo. Uploads are written to the runtime uploads dir
+#' ([tc_custom_templates_dir()], `state/template_uploads/` in production), which
+#' the deploy workflow never syncs (see CLAUDE.md), so they survive a redeploy
+#' automatically. Reuses the existing template resolution logic in
 #' `utils/slide_download.R` rather than duplicating it — this module only
 #' widens where those functions look.
 
@@ -33,7 +34,7 @@ tmpl_looks_like_pptx <- function(path) {
   length(magic) == 2 && magic[1] == as.raw(0x50) && magic[2] == as.raw(0x4B) # "PK"
 }
 
-#' Copy a validated upload into `templates/custom/`, avoiding name collisions.
+#' Copy a validated upload into the runtime uploads dir, avoiding name collisions.
 #' @param tmp_path Path to the uploaded temp file (from `fileInput`).
 #' @param original_name Original file name as selected by the user.
 #' @param templates_dir Optional base templates directory override.
@@ -81,8 +82,8 @@ tmpl_save_upload <- function(tmp_path, original_name, templates_dir = NULL) {
 #' Bundle every currently available template into one `.zip` so someone can
 #' download a base template, edit it in PowerPoint, and re-upload it.
 #'
-#' Includes the built-in `templates/` set plus any uploaded overrides in
-#' `templates/custom/` (deduplicated by name, the custom copy winning — the
+#' Includes the built-in `templates/` set plus any uploaded overrides in the
+#' runtime uploads dir (deduplicated by name, the uploaded copy winning — the
 #' same effective set [tc_list_templates()] shows), so what you download is
 #' exactly what the dashboard would use. Always produces a valid `.zip`; if no
 #' templates are found it contains a short README instead.

@@ -12,6 +12,13 @@ plus the R pipeline that produces its aggregated outputs.
 - `dashboard/data/` — dashboard input files (including per-iteration outputs under
   `data/data_iteration_3/iteration_<id>/`).
 - `dashboard/data/metadata/` — shared metadata and branding helpers (e.g. `brand_colors.R`).
+- `dashboard/templates/` — built-in think-cell `.pptx` slide templates for the "Download slide"
+  export (committed to git, shipped by the deploy).
+- `dashboard/state/` — runtime state, never committed or synced by the deploy: `favorites.json`
+  (shared favorites) and `template_uploads/` (templates uploaded via the "Manage templates" tab).
+  Uploads live here, not under `templates/`, because the Shiny process must be able to write them
+  whereas the deploy-owned `templates/` is read-only on the server; an upload overrides a built-in
+  of the same name. Override with the `SHINY_TEMPLATE_UPLOADS_DIR` env var.
 - `dashboard/tests/testthat/` — testthat tests.
 - `output_src/` — the R pipeline that generates the aggregated `.xlsx` outputs consumed by the dashboard.
 

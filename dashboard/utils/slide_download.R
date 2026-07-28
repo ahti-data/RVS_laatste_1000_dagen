@@ -191,35 +191,60 @@ tc_find_templates_dir <- function(start = NULL) {
   normalizePath(candidates[[1]], winslash = "/", mustWork = FALSE)
 }
 
+#' Root under which the app keeps runtime state it must be able to *write*
+#' (favorites, uploaded templates). Anchored to `APP_ROOT` when the app defines
+#' it, else the working directory — the same base `favorites.json` is written
+#' to. Deliberately NOT the deploy-owned `templates/` dir, which on a server is
+#' typically read-only for the Shiny process.
+tc_runtime_state_root <- function() {
+  root <- if (exists("APP_ROOT")) get("APP_ROOT") else NULL
+  if (is.null(root) || (length(root) == 1 && is.na(root)) || !nzchar(root)) root <- getwd()
+  normalizePath(root, winslash = "/", mustWork = FALSE)
+}
+
 #' Runtime-writable directory for templates uploaded through the app (rather
-#' than committed to git). Never part of the deploy workflow's synced folders,
-#' so uploads here survive a redeploy with no extra plumbing (see
-#' `utils/template_admin.R`).
+#' than committed to git).
+#'
+#' In production (no explicit `templates_dir`) this lives beside the app's other
+#' runtime state, at `state/template_uploads/` — a location the Shiny process
+#' can always write (the same reason `state/favorites.json` works), even when
+#' the deploy-owned `templates/` dir is read-only for the app user. Like
+#' `state/`, it is never synced by the deploy, so uploads survive a redeploy.
+#'
+#' Tests (and bespoke deployments) may pass `templates_dir`, in which case the
+#' historical `templates/custom/` layout under that dir is used instead; the
+#' `SHINY_TEMPLATE_UPLOADS_DIR` environment variable overrides everything.
 #' @param templates_dir Optional base templates directory override.
-#' @return Path (may not yet exist); NA_character_ if the base dir can't be found.
+#' @return Path (may not yet exist).
 tc_custom_templates_dir <- function(templates_dir = NULL) {
-  dir <- tc_or(templates_dir, tc_find_templates_dir())
-  if (is.null(dir) || is.na(dir)) return(NA_character_)
-  file.path(dir, "custom")
+  if (!is.null(templates_dir) && !is.na(templates_dir) && nzchar(templates_dir)) {
+    return(file.path(templates_dir, "custom"))
+  }
+  override <- Sys.getenv("SHINY_TEMPLATE_UPLOADS_DIR", "")
+  if (nzchar(override)) return(override)
+  file.path(tc_runtime_state_root(), "state", "template_uploads")
 }
 
 #' Resolve a template (filename or full path) to an existing file path.
 #'
-#' A bare filename is looked up in `templates/custom/` first, then
-#' `templates/`, so an uploaded override takes precedence over a built-in
-#' template of the same name.
+#' A bare filename is looked up in the runtime uploads dir
+#' ([tc_custom_templates_dir()]) first, then the built-in `templates/`, so an
+#' uploaded override takes precedence over a built-in template of the same name.
 #' @return Normalised path, or NA_character_ if it cannot be found.
 tc_resolve_template_path <- function(template, templates_dir = NULL) {
   if (is.null(template) || is.na(template) || !nzchar(template)) return(NA_character_)
   if (file.exists(template)) {
     return(normalizePath(template, winslash = "/", mustWork = FALSE))
   }
+  custom_dir <- tc_custom_templates_dir(templates_dir)
+  if (!is.null(custom_dir) && !is.na(custom_dir) && nzchar(custom_dir)) {
+    custom_candidate <- file.path(custom_dir, template)
+    if (file.exists(custom_candidate)) {
+      return(normalizePath(custom_candidate, winslash = "/", mustWork = FALSE))
+    }
+  }
   dir <- tc_or(templates_dir, tc_find_templates_dir())
   if (is.null(dir) || is.na(dir)) return(NA_character_)
-  custom_candidate <- file.path(dir, "custom", template)
-  if (file.exists(custom_candidate)) {
-    return(normalizePath(custom_candidate, winslash = "/", mustWork = FALSE))
-  }
   candidate <- file.path(dir, template)
   if (file.exists(candidate)) {
     return(normalizePath(candidate, winslash = "/", mustWork = FALSE))
@@ -307,18 +332,21 @@ TC_BAR_FAMILY <- c(
   "stacked_bar_100", "v_bar_stacked_100"
 )
 
-#' List the template `.pptx` files available in the templates directory.
+#' List the template `.pptx` files available to the app.
 #'
-#' Merges the built-in `templates/` set with any uploaded overrides in
-#' `templates/custom/` (deduplicated by file name; `tc_resolve_template_path()`
-#' prefers the custom copy when both exist).
+#' Merges the built-in `templates/` set with any uploaded overrides in the
+#' runtime uploads dir ([tc_custom_templates_dir()]), deduplicated by file name;
+#' `tc_resolve_template_path()` prefers the uploaded copy when both exist.
 #' @return Sorted character vector of file names (may be empty).
 tc_list_templates <- function(templates_dir = NULL) {
   dir <- tc_or(templates_dir, tc_find_templates_dir())
-  if (is.null(dir) || is.na(dir) || !dir.exists(dir)) return(character(0))
-  base_files   <- list.files(dir, pattern = "\\.pptx$", ignore.case = TRUE)
-  custom_dir   <- file.path(dir, "custom")
-  custom_files <- if (dir.exists(custom_dir)) {
+  base_files <- if (!is.null(dir) && !is.na(dir) && dir.exists(dir)) {
+    list.files(dir, pattern = "\\.pptx$", ignore.case = TRUE)
+  } else {
+    character(0)
+  }
+  custom_dir <- tc_custom_templates_dir(templates_dir)
+  custom_files <- if (!is.null(custom_dir) && !is.na(custom_dir) && dir.exists(custom_dir)) {
     list.files(custom_dir, pattern = "\\.pptx$", ignore.case = TRUE)
   } else {
     character(0)

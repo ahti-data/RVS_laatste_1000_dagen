@@ -41,6 +41,35 @@ test_that("uploads are rejected when not a .pptx or not zip-signed", {
   expect_false(res2$ok)
 })
 
+test_that("uploads default to a runtime-writable dir outside templates/ (production path)", {
+  # With no explicit templates_dir, uploads must NOT target the deploy-owned
+  # templates/ dir (read-only for the app user on a server) but a runtime-
+  # writable location -- the same reason state/favorites.json works.
+  uploads <- tempfile("uploads_")
+  old <- Sys.getenv("SHINY_TEMPLATE_UPLOADS_DIR", unset = NA)
+  Sys.setenv(SHINY_TEMPLATE_UPLOADS_DIR = uploads)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("SHINY_TEMPLATE_UPLOADS_DIR") else Sys.setenv(SHINY_TEMPLATE_UPLOADS_DIR = old)
+    unlink(uploads, recursive = TRUE)
+  }, add = TRUE)
+
+  expect_equal(
+    normalizePath(tc_custom_templates_dir(), winslash = "/", mustWork = FALSE),
+    normalizePath(uploads, winslash = "/", mustWork = FALSE)
+  )
+
+  tmp_upload <- tempfile(fileext = ".pptx")
+  make_fake_pptx(tmp_upload)
+  res <- tmpl_save_upload(tmp_upload, "runtime_deck.pptx")  # no templates_dir -> production path
+  expect_true(res$ok)
+  expect_true(file.exists(file.path(uploads, "runtime_deck.pptx")))
+  expect_true("runtime_deck.pptx" %in% tc_list_templates())
+  expect_equal(
+    normalizePath(tc_resolve_template_path("runtime_deck.pptx"), winslash = "/", mustWork = FALSE),
+    normalizePath(file.path(uploads, "runtime_deck.pptx"), winslash = "/", mustWork = FALSE)
+  )
+})
+
 test_that("a failed write is reported as an error, not a false success", {
   # Point the templates dir at a *file*, so the templates/custom/ subdir can't
   # be created -- standing in for a non-writable directory on the server.
