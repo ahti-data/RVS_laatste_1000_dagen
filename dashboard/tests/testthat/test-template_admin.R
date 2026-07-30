@@ -10,6 +10,12 @@ make_fake_pptx <- function(path) {
   close(con)
 }
 
+make_fake_png <- function(path) {
+  con <- file(path, "wb")
+  writeBin(as.raw(c(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0xFF, 0xFF)), con)
+  close(con)
+}
+
 test_that("filenames are sanitized to a flat, safe .pptx basename", {
   expect_equal(tmpl_sanitize_filename("My Template.pptx"), "My_Template.pptx")
   expect_equal(tmpl_sanitize_filename("../../etc/passwd.pptx"), "passwd.pptx")
@@ -112,6 +118,97 @@ test_that("uploads survive being listed even when no custom dir exists yet", {
   dir.create(templates_dir)
   writeLines("builtin", file.path(templates_dir, "only_builtin.pptx"))
   expect_equal(tc_list_templates(templates_dir), "only_builtin.pptx")
+})
+
+test_that("preview file name mirrors the template's stem with a .png extension", {
+  expect_equal(tc_preview_filename("template_v_bar.pptx"), "template_v_bar.png")
+  expect_equal(tc_preview_filename("My Template.PPTX"), "My Template.png")
+})
+
+test_that("only PNG-signed files are accepted as previews", {
+  tmp_ok <- tempfile(fileext = ".png")
+  make_fake_png(tmp_ok)
+  expect_true(tmpl_looks_like_png(tmp_ok))
+
+  tmp_bad <- tempfile(fileext = ".png")
+  writeLines("not a png", tmp_bad)
+  expect_false(tmpl_looks_like_png(tmp_bad))
+})
+
+test_that("a preview upload requires naming the template it belongs to", {
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  tmp_png <- tempfile(fileext = ".png")
+  make_fake_png(tmp_png)
+
+  res <- tmpl_save_preview_upload(tmp_png, "", templates_dir)
+  expect_false(res$ok)
+
+  res2 <- tmpl_save_preview_upload(tmp_png, NA_character_, templates_dir)
+  expect_false(res2$ok)
+})
+
+test_that("a non-PNG preview upload is rejected", {
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  tmp_fake <- tempfile(fileext = ".png")
+  writeLines("not a png", tmp_fake)
+
+  res <- tmpl_save_preview_upload(tmp_fake, "template_v_bar.pptx", templates_dir)
+  expect_false(res$ok)
+  expect_match(res$message, "PNG")
+})
+
+test_that("a valid preview upload is resolvable and renders as a data URI", {
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  make_fake_pptx(file.path(templates_dir, "template_v_bar.pptx"))
+
+  tmp_png <- tempfile(fileext = ".png")
+  make_fake_png(tmp_png)
+  res <- tmpl_save_preview_upload(tmp_png, "template_v_bar.pptx", templates_dir)
+  expect_true(res$ok)
+
+  resolved <- tc_resolve_preview_path("template_v_bar.pptx", templates_dir)
+  expect_false(is.na(resolved))
+  expect_true(file.exists(resolved))
+
+  uri <- tc_preview_data_uri("template_v_bar.pptx", templates_dir)
+  expect_true(startsWith(uri, "data:image/png;base64,"))
+})
+
+test_that("a template with no preview resolves to NA, not an error", {
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  make_fake_pptx(file.path(templates_dir, "template_line.pptx"))
+
+  expect_true(is.na(tc_resolve_preview_path("template_line.pptx", templates_dir)))
+  expect_true(is.na(tc_preview_data_uri("template_line.pptx", templates_dir)))
+})
+
+test_that("a built-in preview is used when no custom override exists", {
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  make_fake_pptx(file.path(templates_dir, "template_pie.pptx"))
+  dir.create(file.path(templates_dir, "previews"), recursive = TRUE)
+  make_fake_png(file.path(templates_dir, "previews", "template_pie.png"))
+
+  resolved <- tc_resolve_preview_path("template_pie.pptx", templates_dir)
+  expect_false(is.na(resolved))
+  expect_true(grepl(file.path("previews", "template_pie.png"), resolved, fixed = TRUE))
+})
+
+test_that("a custom preview override wins over a built-in preview of the same name", {
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+  make_fake_pptx(file.path(templates_dir, "template_pie.pptx"))
+  dir.create(file.path(templates_dir, "previews"), recursive = TRUE)
+  make_fake_png(file.path(templates_dir, "previews", "template_pie.png"))
+  dir.create(file.path(templates_dir, "custom", "previews"), recursive = TRUE)
+  make_fake_png(file.path(templates_dir, "custom", "previews", "template_pie.png"))
+
+  resolved <- tc_resolve_preview_path("template_pie.pptx", templates_dir)
+  expect_true(grepl(file.path("custom", "previews"), resolved, fixed = TRUE))
 })
 
 test_that("tmpl_build_templates_zip bundles the effective template set", {

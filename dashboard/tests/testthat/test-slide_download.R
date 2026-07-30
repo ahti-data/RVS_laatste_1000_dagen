@@ -68,6 +68,19 @@ test_that("empty titles are omitted but the chart is always present", {
   expect_true(grepl("Chart1", json))
 })
 
+test_that("a chart_id, when supplied, is embedded as a ChartID data block", {
+  json <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig", chart_id = "exp_abc123")
+  expect_true(grepl('"ChartID"', json))
+  expect_true(grepl('"string":"exp_abc123"', json, fixed = TRUE))
+})
+
+test_that("no ChartID block is added when chart_id is omitted or empty", {
+  json1 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig")
+  json2 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig", chart_id = "")
+  expect_false(grepl("ChartID", json1))
+  expect_false(grepl("ChartID", json2))
+})
+
 test_that("log records dashboard/tab/subtab and joins multi-value options", {
   log <- tc_build_log(
     "Laatste 1000 dagen", "Iteratie 1", "Zorg Totaal",
@@ -77,6 +90,22 @@ test_that("log records dashboard/tab/subtab and joins multi-value options", {
   expect_true(grepl("Dashboard:      Laatste 1000 dagen", log))
   expect_true(grepl("Sub-tab:        Zorg Totaal", log))
   expect_true(grepl("tot_variables: a, b", log))
+})
+
+test_that("log includes a Chart ID line, first, when supplied", {
+  log <- tc_build_log(
+    "D", "T", "S", list(), "line", "template_line.pptx",
+    rendered = TRUE, chart_id = "exp_xyz789"
+  )
+  expect_true(grepl("Chart ID:       exp_xyz789", log))
+  # printed before the rest of the header, so it's the first thing a PM sees
+  expect_true(which(grepl("Chart ID:", strsplit(log, "\n")[[1]])) <
+                which(grepl("Dashboard:", strsplit(log, "\n")[[1]])))
+})
+
+test_that("no Chart ID line when chart_id is omitted", {
+  log <- tc_build_log("D", "T", "S", list(), "line", "template_line.pptx", rendered = TRUE)
+  expect_false(grepl("Chart ID:", log))
 })
 
 # ---- ZIP assembly (stub the xlsx writer to avoid a writexl dependency) ------
@@ -112,6 +141,25 @@ test_that("supported chart without think-cell ships template + ppttc fallback", 
   expect_true(any(grepl("README", files)))
   expect_true("iter1_tijd_table.xlsx" %in% files)
   expect_true("log.txt" %in% files)
+})
+
+test_that("a chart_id passed to tc_build_slide_zip lands in both log.txt and the shipped .ppttc", {
+  skip_if_not(have_templates, "templates directory not available")
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "line",
+    filename_prefix = "iter1_tijd", templates_dir = templates_dir,
+    ppttc_exe = NA, write_table_fun = stub_writer, chart_id = "exp_history42"
+  )
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+
+  log_txt <- paste(readLines(file.path(extract_dir, "log.txt")), collapse = "\n")
+  expect_true(grepl("Chart ID:       exp_history42", log_txt))
+
+  ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
+  expect_true(grepl('"ChartID"', ppttc))
+  expect_true(grepl('"string":"exp_history42"', ppttc, fixed = TRUE))
 })
 
 test_that("the fallback .ppttc references the co-located template, not the absolute path used to resolve it", {

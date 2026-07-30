@@ -363,6 +363,87 @@ tc_template_choices <- function(templates_dir = NULL) {
   stats::setNames(values, labels)
 }
 
+# ---------------------------------------------------------------------------
+# Template preview thumbnails (Manage Templates tab).
+#
+# A preview is a plain screenshot PNG, curated by hand (or uploaded through
+# the app) rather than auto-generated -- there is no server-side pptx
+# rendering pipeline. It's purely cosmetic: a missing preview never blocks a
+# template from being used, only from showing a thumbnail.
+# ---------------------------------------------------------------------------
+
+#' Preview file name for a template: same stem, `.png` extension.
+#' @param template_name A `.pptx` file name (e.g. from [tc_list_templates()]).
+tc_preview_filename <- function(template_name) {
+  paste0(tools::file_path_sans_ext(basename(template_name)), ".png")
+}
+
+#' Directory for built-in template previews, curated alongside `templates/`.
+#' @param templates_dir Optional base templates directory override.
+tc_builtin_previews_dir <- function(templates_dir = NULL) {
+  dir <- tc_or(templates_dir, tc_find_templates_dir())
+  if (is.null(dir) || is.na(dir)) return(NA_character_)
+  file.path(dir, "previews")
+}
+
+#' Directory for previews of runtime-uploaded templates. Lives alongside the
+#' uploads themselves ([tc_custom_templates_dir()]) so it follows the same
+#' `SHINY_TEMPLATE_UPLOADS_DIR` override and survives a redeploy the same way.
+#' @param templates_dir Optional base templates directory override.
+tc_custom_previews_dir <- function(templates_dir = NULL) {
+  custom_dir <- tc_custom_templates_dir(templates_dir)
+  if (is.null(custom_dir) || is.na(custom_dir)) return(NA_character_)
+  file.path(custom_dir, "previews")
+}
+
+#' Resolve a template's preview PNG, if one exists.
+#'
+#' Checks the custom (uploaded) previews dir first, then the built-in one --
+#' same precedence as [tc_resolve_template_path()] -- so a preview added
+#' through the app for a built-in template's name still overrides nothing
+#' that matters (there's no built-in preview to lose) and just fills the gap.
+#' @param template_name A `.pptx` file name.
+#' @param templates_dir Optional base templates directory override.
+#' @return Existing PNG path, or `NA_character_` if none is available.
+tc_resolve_preview_path <- function(template_name, templates_dir = NULL) {
+  if (is.null(template_name) || is.na(template_name) || !nzchar(template_name)) {
+    return(NA_character_)
+  }
+  preview_name <- tc_preview_filename(template_name)
+
+  custom_dir <- tc_custom_previews_dir(templates_dir)
+  if (!is.null(custom_dir) && !is.na(custom_dir)) {
+    custom_candidate <- file.path(custom_dir, preview_name)
+    if (file.exists(custom_candidate)) {
+      return(normalizePath(custom_candidate, winslash = "/", mustWork = FALSE))
+    }
+  }
+
+  builtin_dir <- tc_builtin_previews_dir(templates_dir)
+  if (!is.null(builtin_dir) && !is.na(builtin_dir)) {
+    builtin_candidate <- file.path(builtin_dir, preview_name)
+    if (file.exists(builtin_candidate)) {
+      return(normalizePath(builtin_candidate, winslash = "/", mustWork = FALSE))
+    }
+  }
+
+  NA_character_
+}
+
+#' A template's preview as an inline `data:image/png;base64,...` URI, ready to
+#' drop straight into an `<img src=...>` -- avoids needing a `www/`-style
+#' static resource route for files that live under `templates/` or `state/`.
+#' @param template_name A `.pptx` file name.
+#' @param templates_dir Optional base templates directory override.
+#' @return Data URI string, or `NA_character_` if no preview is available.
+tc_preview_data_uri <- function(template_name, templates_dir = NULL) {
+  path <- tc_resolve_preview_path(template_name, templates_dir)
+  if (is.na(path)) return(NA_character_)
+  bytes <- tryCatch(readBin(path, "raw", n = file.info(path)$size), error = function(e) NULL)
+  if (is.null(bytes) || length(bytes) == 0) return(NA_character_)
+  paste0("data:image/png;base64,", jsonlite::base64_enc(bytes))
+}
+
 #' Detect the template chart type for the *displayed* figure from its data.
 #'
 #' Same rule used by [tc_prepare_slide()], exposed separately so the UI can show
@@ -500,8 +581,15 @@ tc_prepare_slide <- function(df, chart_type, category_col, series_col, value_col
 #' @param template Template path written into the JSON (forward-slashed).
 #' @param slide_title Optional slide title (bound to SlideTitle). Skipped if "".
 #' @param figure_title Optional figure caption (bound to FigureTitle). Skipped if "".
+#' @param chart_id Optional export-history chart id (bound to a `ChartID`
+#'   automation field). Lets a template designer bind a small, discreet text
+#'   box to `ChartID` so a PM can find this exact export again later in the
+#'   **Export history** tab (`utils/export_history.R`) straight from a real
+#'   slide, months after the fact -- no export-history-specific work is
+#'   required here beyond adding one more named data block, harmless (ignored
+#'   by think-cell) for any template that hasn't bound the field yet.
 #' @return A single JSON object string (not wrapped in `[...]`).
-tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_title = "") {
+tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_title = "", chart_id = NULL) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
   if (ncol(df) < 2) {
     stop("think-cell matrix needs at least a label column and one value column.", call. = FALSE)
@@ -526,6 +614,10 @@ tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_ti
     blocks <- c(blocks, sprintf('{"name":"FigureTitle","table":[[%s]]}',
                                 tc_cell_label(figure_title)))
   }
+  if (nzchar(trimws(tc_or(chart_id, "")))) {
+    blocks <- c(blocks, sprintf('{"name":"ChartID","table":[[%s]]}',
+                                tc_cell_label(chart_id)))
+  }
 
   data_block <- paste(blocks, collapse = ",")
   sprintf('{"template":"%s","data":[%s]}',
@@ -535,8 +627,8 @@ tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_ti
 #' Build the think-cell `.ppttc` JSON for one slide.
 #' @inheritParams tc_build_ppttc_slide_block
 #' @return A single JSON string (a one-element array).
-tc_build_ppttc_json <- function(df, template, slide_title = "", figure_title = "") {
-  sprintf("[%s]", tc_build_ppttc_slide_block(df, template, slide_title, figure_title))
+tc_build_ppttc_json <- function(df, template, slide_title = "", figure_title = "", chart_id = NULL) {
+  sprintf("[%s]", tc_build_ppttc_slide_block(df, template, slide_title, figure_title, chart_id))
 }
 
 # ---------------------------------------------------------------------------
@@ -599,9 +691,12 @@ tc_format_selections <- function(selections) {
 }
 
 #' Assemble the human-readable export log.
+#' @param chart_id Optional export-history chart id, printed as the first
+#'   field so it's the easiest thing to spot and copy into the **Export
+#'   history** tab's search box (see `utils/export_history.R`).
 tc_build_log <- function(dashboard_title, tab_label, subtab_label, selections,
                          chart_type, template_file, rendered, note = NULL,
-                         order_mode = NULL) {
+                         order_mode = NULL, chart_id = NULL) {
   order_label <- switch(
     tc_or(order_mode, "auto"),
     auto     = "auto (numeric ascending when applicable, else as displayed)",
@@ -627,6 +722,9 @@ tc_build_log <- function(dashboard_title, tab_label, subtab_label, selections,
            else "no (template + .ppttc data included instead)"),
     sep = "\n"
   )
+  if (!is.null(chart_id) && nzchar(chart_id)) {
+    header <- paste(paste0("Chart ID:       ", chart_id), header, sep = "\n")
+  }
   if (!is.null(note) && nzchar(note)) {
     header <- paste(header, paste0("Note:           ", note), sep = "\n")
   }
@@ -653,6 +751,10 @@ tc_build_log <- function(dashboard_title, tab_label, subtab_label, selections,
 #' @param filename_prefix Prefix for the table file name.
 #' @param templates_dir,template_override,ppttc_exe Optional overrides.
 #' @param write_table_fun Function(data, path) writing the underlying table.
+#' @param chart_id Optional export-history chart id (see
+#'   [tc_build_ppttc_slide_block()] and [tc_build_log()]); passed straight
+#'   through to both, so callers not using `utils/export_history.R` can just
+#'   omit it (default `NULL`, identical to today's behavior).
 #' @return list(zip_path, rendered, template, note) invisibly.
 tc_build_slide_zip <- function(zip_path,
                                tc_data,
@@ -669,7 +771,8 @@ tc_build_slide_zip <- function(zip_path,
                                ppttc_exe        = NULL,
                                slide_matrix     = NULL,
                                slide_order      = "auto",
-                               write_table_fun  = write_tc_xlsx) {
+                               write_table_fun  = write_tc_xlsx,
+                               chart_id         = NULL) {
 
   resolved_type <- normalize_tc_chart_type(chart_type)
   template_path <- tc_template_for_chart_type(resolved_type, templates_dir, template_override)
@@ -721,7 +824,7 @@ tc_build_slide_zip <- function(zip_path,
   } else {
     # ---- (3) slide ----------------------------------------------------------
     if (!nzchar(trimws(tc_or(slide_title, "")))) slide_title <- tc_or(subtab_label, "")
-    json <- tc_build_ppttc_json(slide_matrix, tc_short_path(template_path), slide_title, figure_title)
+    json <- tc_build_ppttc_json(slide_matrix, tc_short_path(template_path), slide_title, figure_title, chart_id)
     exe  <- tc_or(ppttc_exe, tc_find_ppttc_exe())
 
     if (!is.null(exe) && !is.na(exe) && nzchar(exe)) {
@@ -749,7 +852,7 @@ tc_build_slide_zip <- function(zip_path,
       # their own PC has no such path; think-cell needs "slide_template.pptx"
       # sitting right next to chart_data.ppttc, not a server path it can't reach.
       file.copy(template_path, file.path(work, "slide_template.pptx"), overwrite = TRUE)
-      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title)
+      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title, chart_id)
       writeLines(portable_json, file.path(work, "chart_data.ppttc"), useBytes = TRUE)
       writeLines(paste0(
         "think-cell was not available to render the slide automatically on this machine.\n",
@@ -774,7 +877,8 @@ tc_build_slide_zip <- function(zip_path,
     template_file   = if (has_template) basename(template_path) else NA_character_,
     rendered        = rendered,
     note            = note,
-    order_mode      = slide_order
+    order_mode      = slide_order,
+    chart_id        = chart_id
   )
   writeLines(log_txt, file.path(work, "log.txt"), useBytes = TRUE)
 

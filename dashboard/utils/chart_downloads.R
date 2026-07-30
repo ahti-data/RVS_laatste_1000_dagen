@@ -5,6 +5,66 @@ resolve_tc_chart_type <- function(chart_type) {
   chart_type
 }
 
+# ---------------------------------------------------------------------------
+# Client-side PNG snapshot on "Save as favorite".
+#
+# Captures whatever Plotly widget is paired with a chart's download module
+# (via `plot_output_id`) at the moment it is starred, using Plotly.js's own
+# Plotly.toImage() -- i.e. exactly what's on screen, no server-side ggplot
+# object needed. The image only leaves the browser once the server confirms
+# the favorite was saved and tells the client which favorite id to tag it
+# with (session$sendCustomMessage("tc_favorite_saved", ...)), so the PNG on
+# disk (state/favorite_assets/<id>.png) always matches a real favorites.json
+# entry. Safe no-op when the paired output isn't a Plotly widget (e.g. a
+# renderPlot-based chart) or Plotly can't be found.
+#
+# Emitted on every chart_data_downloads_ui() call that shows the favorite
+# button; the `window.__tcFavoriteCaptureInit` guard makes registering the
+# (single, delegated) listeners idempotent no matter how many times the
+# script tag itself appears in the page.
+TC_FAVORITE_CAPTURE_JS <- "
+if (!window.__tcFavoriteCaptureInit) {
+  window.__tcFavoriteCaptureInit = true;
+  var __tcPendingCapture = {};
+
+  function __tcFindPlotlyDiv(outputId) {
+    var el = document.getElementById(outputId);
+    if (!el) return null;
+    if (el.classList && el.classList.contains('js-plotly-plot')) return el;
+    return el.querySelector('.js-plotly-plot');
+  }
+
+  $(document).on('click', '.tc-favorite-btn', function() {
+    var btnId = this.id;
+    var wrap = $(this).closest('[data-plot-output-id]');
+    var outputId = wrap.length ? wrap.data('plot-output-id') : null;
+    var gd = (outputId && typeof Plotly !== 'undefined') ? __tcFindPlotlyDiv(outputId) : null;
+    if (!gd) {
+      __tcPendingCapture[btnId] = null;
+      return;
+    }
+    var w = (gd._fullLayout && gd._fullLayout.width) || 900;
+    var h = (gd._fullLayout && gd._fullLayout.height) || 550;
+    __tcPendingCapture[btnId] = Plotly.toImage(gd, {format: 'png', width: w, height: h})
+      .catch(function() { return null; });
+  });
+
+  $(document).on('shiny:connected', function() {
+    Shiny.addCustomMessageHandler('tc_favorite_saved', function(msg) {
+      var p = __tcPendingCapture[msg.btn_id];
+      if (typeof p === 'undefined') return;
+      delete __tcPendingCapture[msg.btn_id];
+      if (p === null) return;
+      p.then(function(dataUrl) {
+        if (!dataUrl) return;
+        var inputId = msg.btn_id.replace(/favorite$/, 'png_capture');
+        Shiny.setInputValue(inputId, {fav_id: msg.fav_id, image: dataUrl}, {priority: 'event'});
+      });
+    });
+  });
+}
+"
+
 #' UI for raw and think-cell chart data downloads.
 #'
 #' The think-cell button is only shown when `chart_type` is supported.
@@ -14,13 +74,20 @@ resolve_tc_chart_type <- function(chart_type) {
 #' @param raw_label Download button label for raw data.
 #' @param thinkcell_label Download button label for think-cell data.
 #' @param favorite_label Label for the "save as favorite" button.
+#' @param plot_output_id Optional Shiny output id (top-level, NOT namespaced --
+#'   e.g. `"plot_basispopulatie"`) of the Plotly widget this chart's downloads
+#'   pair with. When set, starring a favorite also snapshots that widget as a
+#'   PNG (see [TC_FAVORITE_CAPTURE_JS]) for inclusion in the favorites deck
+#'   ZIP. Omit for charts with no Plotly widget (e.g. `renderPlot()`-based) --
+#'   the favorite is still saved, just without an image.
 chart_data_downloads_ui <- function(
     id,
     chart_type,
     raw_label = "Download data (raw)",
     thinkcell_label = "Download data (think-cell)",
     slide_label = "Download slide (PowerPoint)",
-    favorite_label = "☆ Save as favorite"
+    favorite_label = "☆ Save as favorite",
+    plot_output_id = NULL
 ) {
   ns <- shiny::NS(id)
 
@@ -79,9 +146,14 @@ chart_data_downloads_ui <- function(
             selected = "auto"
           ),
           shiny::uiOutput(ns("slide_template_info")),
-          shiny::actionButton(ns("favorite"), favorite_label, class = "btn-default",
-                              style = "margin-top:8px;"),
-          shiny::uiOutput(ns("favorite_status"))
+          shiny::tags$div(
+            `data-plot-output-id` = plot_output_id,
+            shiny::actionButton(ns("favorite"), favorite_label,
+                                class = "btn-default tc-favorite-btn",
+                                style = "margin-top:8px;"),
+            shiny::uiOutput(ns("favorite_status"))
+          ),
+          shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS))
         )
       )
     )
@@ -334,20 +406,56 @@ chart_data_downloads_server <- function(
             }
           }
 
+          resolved_slide_title  <- resolve_opt(slide_title)
+          resolved_figure_title <- resolve_opt(figure_title)
+          resolved_template_ovr <- slide_effective_override()
+          resolved_slide_order  <- tc_or(input$slide_order, "auto")
+          resolved_dashboard    <- tc_ctx_dashboard_title()
+          resolved_tab          <- tc_ctx_active_tab()
+          resolved_subtab       <- tc_ctx_active_subtab()
+          resolved_selections   <- tc_ctx_selections(module_id = id)
+
+          # Auto-log this export to the shared Export history tab (see
+          # utils/export_history.R), using exactly these already-resolved
+          # values -- not a second, independent re-derivation -- so the
+          # history snapshot always matches what's actually downloaded below.
+          # Skipped for faceted charts (tc_data is a per-facet list there),
+          # same scope limitation favorites_capture() has today.
+          chart_id <- NULL
+          if (is.null(facet_col) && !is_tc_workbook_list(tc_data)) {
+            history_entry <- tc_history_capture(
+              tc_data           = tc_data,
+              chart_type        = slide_type,
+              slide_matrix      = slide_matrix,
+              slide_title       = resolved_slide_title,
+              figure_title      = resolved_figure_title,
+              template_override = resolved_template_ovr,
+              slide_order       = resolved_slide_order,
+              dashboard_title   = resolved_dashboard,
+              tab_label         = resolved_tab,
+              subtab_label      = resolved_subtab,
+              selections        = resolved_selections,
+              filename_prefix   = filename_prefix
+            )
+            history_entry$id <- export_history_new_id()
+            chart_id <- export_history_add(history_entry)
+          }
+
           tc_build_slide_zip(
             zip_path          = file,
             tc_data           = tc_data,
             chart_type        = slide_type,
             slide_matrix      = slide_matrix,
-            slide_title       = resolve_opt(slide_title),
-            figure_title      = resolve_opt(figure_title),
-            dashboard_title   = tc_ctx_dashboard_title(),
-            tab_label         = tc_ctx_active_tab(),
-            subtab_label      = tc_ctx_active_subtab(),
-            selections        = tc_ctx_selections(module_id = id),
+            slide_title       = resolved_slide_title,
+            figure_title      = resolved_figure_title,
+            dashboard_title   = resolved_dashboard,
+            tab_label         = resolved_tab,
+            subtab_label      = resolved_subtab,
+            selections        = resolved_selections,
             filename_prefix   = filename_prefix,
-            template_override = slide_effective_override(),
-            slide_order       = tc_or(input$slide_order, "auto")
+            template_override = resolved_template_ovr,
+            slide_order       = resolved_slide_order,
+            chart_id          = chart_id
           )
         }
       )
@@ -375,9 +483,33 @@ chart_data_downloads_server <- function(
           selections        = tc_ctx_selections(module_id = id),
           filename_prefix   = filename_prefix
         )
-        favorites_add(entry)
+        fav_id <- favorites_add(entry)
         favorite_status_rv(sprintf("Saved '%s' to favorites.", entry$label))
+        # Tell the client which favorite this button's click just created, so
+        # it can tag the (already-requested, possibly still-in-flight) PNG
+        # snapshot with the right id -- see TC_FAVORITE_CAPTURE_JS.
+        session$sendCustomMessage(
+          "tc_favorite_saved",
+          list(btn_id = session$ns("favorite"), fav_id = fav_id)
+        )
       })
+
+      # Written by TC_FAVORITE_CAPTURE_JS once the client-side Plotly snapshot
+      # resolves. Silently ignored if no plot_output_id was wired, if the
+      # paired output isn't a Plotly widget, or if decoding fails -- a missing
+      # snapshot just means that favorite's PNG is absent from the deck ZIP,
+      # never a broken favorite.
+      shiny::observeEvent(input$png_capture, {
+        payload <- input$png_capture
+        fav_id  <- payload$fav_id
+        image   <- payload$image
+        if (is.null(fav_id) || is.null(image) || !nzchar(fav_id)) return()
+        b64   <- sub("^data:image/[^;]+;base64,", "", image)
+        bytes <- tryCatch(jsonlite::base64_dec(b64), error = function(e) NULL)
+        if (is.null(bytes)) return()
+        dir.create(favorites_assets_dir(), recursive = TRUE, showWarnings = FALSE)
+        writeBin(bytes, favorite_asset_path(fav_id))
+      }, ignoreInit = TRUE)
 
       output$favorite_status <- shiny::renderUI({
         shiny::req(favorite_status_rv())

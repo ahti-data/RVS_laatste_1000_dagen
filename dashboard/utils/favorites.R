@@ -19,6 +19,20 @@ favorites_path <- function() {
   Sys.getenv("SHINY_FAVORITES_PATH", FAVORITES_RELATIVE_PATH)
 }
 
+#' Directory holding client-captured PNG snapshots of starred charts (see
+#' `TC_FAVORITE_CAPTURE_JS` in `utils/chart_downloads.R`). Kept beside
+#' `favorites.json` so it follows the same `SHINY_FAVORITES_PATH` override and
+#' the same never-committed, never-deploy-synced `state/` treatment.
+favorites_assets_dir <- function() {
+  file.path(dirname(favorites_path()), "favorite_assets")
+}
+
+#' Path a favorite's PNG snapshot would live at, whether or not it exists yet.
+#' @param id Favorite id.
+favorite_asset_path <- function(id) {
+  file.path(favorites_assets_dir(), paste0(id, ".png"))
+}
+
 #' Read the shared favorites list.
 #' @return List of favorite entries (possibly empty).
 favorites_list <- function() {
@@ -58,11 +72,14 @@ favorites_add <- function(entry) {
   invisible(entry$id)
 }
 
-#' Remove a favorite by id.
+#' Remove a favorite by id (and its PNG snapshot, if any, to avoid orphaned
+#' asset files accumulating in `favorites_assets_dir()`).
 favorites_remove <- function(id) {
   entries <- favorites_list()
   kept <- Filter(function(e) !identical(e$id, id), entries)
   favorites_write(kept)
+  asset <- favorite_asset_path(id)
+  if (file.exists(asset)) unlink(asset)
   invisible(TRUE)
 }
 
@@ -112,7 +129,9 @@ favorites_table_to_storage <- function(df) {
 #' (`utils/chart_downloads.R`) rather than the other way around, so both stay
 #' obviously in sync.
 #'
-#' @param data Resolved data frame (already called, not a reactive).
+#' @param data Resolved data frame (already called, not a reactive). Stored
+#'   verbatim as `raw_table` (matches the "Download data (raw)" button) as well
+#'   as reshaped into the think-cell matrix (`tc_table`).
 #' @param chart_type Resolved (non-reactive) think-cell chart type.
 #' @param category_col,series_col,value_col Column names for think-cell export.
 #' @param agg_fun,category_order,series_order Passed through to [tc_prepare_slide()].
@@ -200,15 +219,25 @@ favorites_capture <- function(
     slide_title     = effective_slide_title,
     figure_title    = tc_or(figure_title, ""),
     slide_block     = slide_block,
-    tc_table        = favorites_table_to_storage(slide_matrix)
+    tc_table        = favorites_table_to_storage(slide_matrix),
+    # The exact data behind the plot, before think-cell reshaping -- the same
+    # data the chart's own "Download data (raw)" button writes. Captured
+    # alongside tc_table so the combined favorites deck can ship both a
+    # think-cell workbook and an "as originally plotted" workbook.
+    raw_table       = favorites_table_to_storage(data)
   )
 }
 
-#' Build one combined ZIP from every saved favorite: one workbook (one sheet
-#' per favorite), one combined log, and either a single rendered multi-slide
-#' deck (one `ppttc.exe` call over every favorite's slide block concatenated
-#' into one `.ppttc` array) or the same graceful template+`.ppttc`+README
-#' fallback [tc_build_slide_zip()] uses when no renderer is available.
+#' Build one combined ZIP from every saved favorite: two workbooks (one sheet
+#' per favorite each, same sheet names) -- `favorites_thinkcell_tables.xlsx`
+#' (the think-cell-shaped matrix) and `favorites_raw_tables.xlsx` (the original
+#' plot data, matching each chart's "Download data (raw)" button) -- a
+#' `chart_<label>.png` snapshot for every favorite that has one (see
+#' `TC_FAVORITE_CAPTURE_JS` in `utils/chart_downloads.R`), plus one combined
+#' log, and either a single rendered multi-slide deck (one `ppttc.exe` call
+#' over every favorite's slide block concatenated into one `.ppttc` array) or
+#' the same graceful template+`.ppttc`+README fallback [tc_build_slide_zip()]
+#' uses when no renderer is available.
 #'
 #' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
 #' @param entries Favorites to include; defaults to every saved favorite.
@@ -236,7 +265,33 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
       lapply(entries, function(e) favorites_table_as_df(e$tc_table)),
       labels
     )
-    write_tc_xlsx(sheets, file.path(work, "favorites_table.xlsx"))
+    write_tc_xlsx(sheets, file.path(work, "favorites_thinkcell_tables.xlsx"))
+
+    # raw_table is only present on favorites captured after this field was
+    # added; older favorites simply don't contribute a sheet here rather than
+    # failing the whole export.
+    has_raw <- vapply(entries, function(e) !is.null(e$raw_table), logical(1))
+    if (any(has_raw)) {
+      raw_sheets <- stats::setNames(
+        lapply(entries[has_raw], function(e) favorites_table_as_df(e$raw_table)),
+        labels[has_raw]
+      )
+      write_tc_xlsx(raw_sheets, file.path(work, "favorites_raw_tables.xlsx"))
+    }
+
+    # Client-captured PNG snapshots (see TC_FAVORITE_CAPTURE_JS), one per
+    # favorite that has one -- named after the same sheet label so it's
+    # obvious which workbook sheet a given image goes with. Kept flat
+    # (alongside the other zip contents, not in a subfolder) because the zip
+    # helper below lists `work` non-recursively.
+    for (i in seq_along(entries)) {
+      fav_id <- entries[[i]]$id
+      if (is.null(fav_id) || !nzchar(fav_id)) next
+      asset <- favorite_asset_path(fav_id)
+      if (file.exists(asset)) {
+        file.copy(asset, file.path(work, paste0("chart_", labels[[i]], ".png")), overwrite = TRUE)
+      }
+    }
 
     renderable <- Filter(function(e) !is.null(e$slide_block) && nzchar(tc_or(e$slide_block, "")), entries)
     rendered <- FALSE

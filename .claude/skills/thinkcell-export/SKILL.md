@@ -7,14 +7,22 @@ description: Standardize think-cell data exports from Shiny dashboard charts. Us
 
 When adding or editing charts with download buttons, follow this pattern.
 
-## Dual download buttons
+## Download buttons
 
-Every chart that supports export must offer:
+Every chart that supports export offers, via `chart_data_downloads_ui()` / `chart_data_downloads_server()`
+from `dashboard/utils/chart_downloads.R`:
 
 1. **Download data (raw)** — the exact data frame used to build the ggplot, written as `.xlsx` without reshaping.
 2. **Download data (think-cell)** — the same data passed through `format_tc_data()`, written as `.xlsx`.
-
-Use `chart_data_downloads_ui()` and `chart_data_downloads_server()` from `dashboard/utils/chart_downloads.R`.
+3. **Download slide (PowerPoint)** — shown automatically whenever a `templates/*.pptx` template
+   matches the chart type (see `dashboard/utils/slide_download.R`); returns a ZIP with the slide
+   (or a graceful template+`.ppttc`+instructions fallback when no think-cell renderer is
+   available), the underlying table, and a log of the options that produced it. Every click is
+   also logged automatically to the shared **Export history** tab
+   (`dashboard/utils/export_history.R`) with a short chart id, so it can be redownloaded exactly
+   later — no wiring needed per chart, this happens inside `chart_data_downloads_server()` itself.
+   Next to the slide button, a "☆ Save as favorite" button snapshots that export into the shared
+   **Favorites** tab (`dashboard/utils/favorites.R`) for later bulk download.
 
 The think-cell button is shown only when `chart_type` is in `TC_SUPPORTED_CHART_TYPES`:
 
@@ -70,6 +78,14 @@ Never rely on the default alphabetical order for a chart whose bars are intentio
 - Keep the plotted order: pass factor-ordered data or `category_order`/`series_order` (see
   "Preserving the plotted bar/category order" above).
 - Add new chart types in `dashboard/utils/format_thinkcell_download.R` with tests before exposing the think-cell button.
+- New `.pptx` slide templates go in `dashboard/templates/` (built-in) or can be added at runtime
+  via the **Manage templates** panel (`dashboard/utils/template_admin.R`), which writes to the
+  runtime uploads dir (`dashboard/state/template_uploads/`) — a git commit is never required just
+  to add a template.
+- Pass `plot_output_id` (the chart's plain, un-namespaced `plotlyOutput()` id) to
+  `chart_data_downloads_ui()` whenever the chart is Plotly-based, so starring it also captures a
+  PNG snapshot for the favorites deck ZIP. Omit it for `renderPlot()`-based charts — the favorite
+  still saves, just without an image.
 
 ## Example wiring
 

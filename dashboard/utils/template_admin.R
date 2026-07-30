@@ -79,6 +79,59 @@ tmpl_save_upload <- function(tmp_path, original_name, templates_dir = NULL) {
   list(ok = TRUE, message = sprintf("Uploaded '%s'.", filename), filename = filename)
 }
 
+#' Whether a file looks like a real PNG (checks the 8-byte PNG signature)
+#' rather than something merely renamed to end in `.png`.
+#' @param path Path to the uploaded temp file.
+tmpl_looks_like_png <- function(path) {
+  con <- file(path, "rb")
+  on.exit(close(con))
+  magic <- tryCatch(readBin(con, "raw", n = 8), error = function(e) raw(0))
+  png_sig <- as.raw(c(0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A))
+  length(magic) == 8 && identical(magic, png_sig)
+}
+
+#' Save an uploaded preview screenshot for a named template.
+#'
+#' Previews are purely cosmetic (see `utils/slide_download.R`), so this never
+#' touches the templates themselves -- just adds/replaces a thumbnail image,
+#' named after the template it belongs to.
+#' @param tmp_path Path to the uploaded temp file (from `fileInput`).
+#' @param template_name The `.pptx` file name this preview belongs to (as
+#'   chosen from [tc_list_templates()]).
+#' @param templates_dir Optional base templates directory override.
+#' @return list(ok, message).
+tmpl_save_preview_upload <- function(tmp_path, template_name, templates_dir = NULL) {
+  if (is.null(template_name) || is.na(template_name) || !nzchar(template_name)) {
+    return(list(ok = FALSE, message = "Choose which template this preview belongs to."))
+  }
+  if (!tmpl_looks_like_png(tmp_path)) {
+    return(list(ok = FALSE, message = "File does not look like a valid PNG image."))
+  }
+
+  preview_dir <- tc_custom_previews_dir(templates_dir)
+  if (is.null(preview_dir) || is.na(preview_dir)) {
+    return(list(ok = FALSE, message = "Could not resolve a previews directory to upload into."))
+  }
+  if (!dir.exists(preview_dir)) {
+    dir.create(preview_dir, recursive = TRUE, showWarnings = FALSE)
+  }
+  if (!dir.exists(preview_dir)) {
+    return(list(ok = FALSE, message = sprintf(
+      "Could not create the previews folder '%s'. The app may not have write access there.",
+      preview_dir)))
+  }
+
+  dest <- file.path(preview_dir, tc_preview_filename(template_name))
+  copied <- file.copy(tmp_path, dest, overwrite = TRUE)
+  if (!isTRUE(copied) || !file.exists(dest)) {
+    return(list(ok = FALSE, message = sprintf(
+      "Could not save the preview to '%s'. The folder may not be writable by the app.",
+      dest)))
+  }
+
+  list(ok = TRUE, message = sprintf("Saved preview for '%s'.", template_name))
+}
+
 #' Bundle every currently available template into one `.zip` so someone can
 #' download a base template, edit it in PowerPoint, and re-upload it.
 #'
@@ -135,6 +188,18 @@ template_admin_ui <- function(id) {
     ),
     shiny::fileInput(ns("upload"), "Upload a .pptx template", accept = ".pptx"),
     shiny::uiOutput(ns("status")),
+
+    shiny::h5("Preview image"),
+    shiny::p(
+      class = "text-muted",
+      "Add or replace a screenshot for a template, so it's easier to tell templates ",
+      "apart at a glance without opening each one."
+    ),
+    shiny::uiOutput(ns("preview_template_select")),
+    shiny::fileInput(ns("preview_upload"), "Preview image (.png)", accept = ".png"),
+    shiny::actionButton(ns("save_preview"), "Save preview", class = "btn-default"),
+    shiny::uiOutput(ns("preview_status")),
+
     shiny::h5("Available templates"),
     shiny::p(
       class = "text-muted",
@@ -143,7 +208,7 @@ template_admin_ui <- function(id) {
     ),
     shiny::downloadButton(ns("download_templates"), "Download templates (.zip)",
                           class = "btn-default"),
-    shiny::tableOutput(ns("template_list"))
+    shiny::uiOutput(ns("template_list"))
   )
 }
 
@@ -173,6 +238,34 @@ template_admin_server <- function(id, templates_dir = NULL) {
       shiny::tags$p(class = cls, status_rv$message)
     })
 
+    preview_status_rv <- shiny::reactiveValues(message = NULL, ok = NA)
+
+    output$preview_template_select <- shiny::renderUI({
+      refresh_trigger()
+      shiny::selectInput(
+        session$ns("preview_template"), "Template",
+        choices = tc_list_templates(templates_dir)
+      )
+    })
+
+    shiny::observeEvent(input$save_preview, {
+      shiny::req(input$preview_upload)
+      result <- tmpl_save_preview_upload(
+        input$preview_upload$datapath, input$preview_template, templates_dir
+      )
+      preview_status_rv$message <- result$message
+      preview_status_rv$ok <- result$ok
+      if (isTRUE(result$ok)) {
+        refresh_trigger(shiny::isolate(refresh_trigger()) + 1)
+      }
+    })
+
+    output$preview_status <- shiny::renderUI({
+      shiny::req(preview_status_rv$message)
+      cls <- if (isTRUE(preview_status_rv$ok)) "text-success" else "text-danger"
+      shiny::tags$p(class = cls, preview_status_rv$message)
+    })
+
     output$download_templates <- shiny::downloadHandler(
       filename = function() paste0("slide_templates_", Sys.Date(), ".zip"),
       content = function(file) {
@@ -180,16 +273,50 @@ template_admin_server <- function(id, templates_dir = NULL) {
       }
     )
 
-    output$template_list <- shiny::renderTable({
+    output$template_list <- shiny::renderUI({
       refresh_trigger()
       files <- tc_list_templates(templates_dir)
+      if (length(files) == 0) {
+        return(shiny::tags$p(class = "text-muted", "No templates available yet."))
+      }
       custom_dir <- tc_custom_templates_dir(templates_dir)
-      is_custom <- !is.na(custom_dir) & file.exists(file.path(custom_dir, files))
-      data.frame(
-        Template = files,
-        Source   = ifelse(is_custom, "Uploaded", "Built-in"),
-        stringsAsFactors = FALSE
-      )
+      rows <- lapply(files, function(f) {
+        is_custom    <- !is.na(custom_dir) && file.exists(file.path(custom_dir, f))
+        preview_uri  <- tc_preview_data_uri(f, templates_dir)
+        thumb <- if (!is.na(preview_uri)) {
+          shiny::tags$img(
+            src = preview_uri,
+            style = paste(
+              "width:120px; height:80px; object-fit:contain; background:#fff;",
+              "border:1px solid #E4E7EE; border-radius:4px;"
+            )
+          )
+        } else {
+          shiny::tags$div(
+            style = paste(
+              "width:120px; height:80px; display:flex; align-items:center;",
+              "justify-content:center; background:#F7F8FA; border:1px dashed #D1D5DB;",
+              "border-radius:4px; font-size:11px; color:#9CA3AF; text-align:center;"
+            ),
+            "No preview"
+          )
+        }
+        shiny::tags$div(
+          style = paste(
+            "display:flex; align-items:center; gap:12px; padding:8px 0;",
+            "border-bottom:1px solid #eee;"
+          ),
+          thumb,
+          shiny::tags$div(
+            shiny::tags$strong(f),
+            shiny::tags$div(
+              style = "font-size:12px; color:#6B7280;",
+              if (is_custom) "Uploaded" else "Built-in"
+            )
+          )
+        )
+      })
+      do.call(shiny::tagList, rows)
     })
 
     invisible(refresh_trigger)

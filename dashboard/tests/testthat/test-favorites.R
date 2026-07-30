@@ -64,6 +64,36 @@ test_that("add/list/remove round-trip through the JSON file", {
   })
 })
 
+test_that("favorite asset path lives beside favorites.json, keyed by id", {
+  with_favorites_path({
+    expect_equal(
+      normalizePath(favorites_assets_dir(), winslash = "/", mustWork = FALSE),
+      normalizePath(file.path(dirname(favorites_path()), "favorite_assets"), winslash = "/", mustWork = FALSE)
+    )
+    expect_equal(basename(favorite_asset_path("abc123")), "abc123.png")
+  })
+})
+
+test_that("removing a favorite also deletes its PNG snapshot, if any", {
+  with_favorites_path({
+    id <- favorites_add(list(label = "Has a snapshot"))
+    dir.create(favorites_assets_dir(), recursive = TRUE, showWarnings = FALSE)
+    writeBin(as.raw(1:4), favorite_asset_path(id))
+    expect_true(file.exists(favorite_asset_path(id)))
+
+    favorites_remove(id)
+    expect_false(file.exists(favorite_asset_path(id)))
+  })
+})
+
+test_that("removing a favorite with no PNG snapshot doesn't error", {
+  with_favorites_path({
+    id <- favorites_add(list(label = "No snapshot"))
+    expect_false(file.exists(favorite_asset_path(id)))
+    expect_error(favorites_remove(id), NA)
+  })
+})
+
 test_that("favorites persist across a fresh read (simulating an app restart)", {
   with_favorites_path({
     favorites_add(list(label = "Survives restart"))
@@ -162,6 +192,7 @@ test_that("deck ZIP with no favorites still produces a valid, explanatory ZIP", 
 test_that("deck ZIP combines table + log for favorites without a template", {
   z <- tempfile(fileext = ".zip")
   entries <- list(
+    # No raw_table field -- mimics a favorite saved before that field existed.
     list(label = "No template chart", dashboard_title = "D", tab_label = "T",
          subtab_label = "S", chart_type = "waterfall", template_name = NA_character_,
          selections = list(), slide_order = "auto", slide_block = NULL,
@@ -169,10 +200,65 @@ test_that("deck ZIP combines table + log for favorites without a template", {
   )
   favorites_build_deck_zip(z, entries = entries)
   files <- utils::unzip(z, list = TRUE)$Name
-  expect_true("favorites_table.xlsx" %in% files)
+  expect_true("favorites_thinkcell_tables.xlsx" %in% files)
   expect_true("log.txt" %in% files)
   expect_true("NO_TEMPLATE.txt" %in% files)
   expect_false(any(grepl("deck", files)))
+  # No raw_table on this entry -> the raw workbook is skipped, not an error.
+  expect_false("favorites_raw_tables.xlsx" %in% files)
+})
+
+test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one", {
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  z <- tempfile(fileext = ".zip")
+  entry <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  favorites_build_deck_zip(z, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("favorites_thinkcell_tables.xlsx" %in% files)
+  expect_true("favorites_raw_tables.xlsx" %in% files)
+
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  raw <- as.data.frame(readxl::read_excel(
+    file.path(extract_dir, "favorites_raw_tables.xlsx"), sheet = "Revenue"
+  ))
+  # The raw workbook holds the original long-format plot data, not the
+  # think-cell pivoted matrix.
+  expect_true(all(c("quarter", "product", "revenue") %in% names(raw)))
+  expect_equal(nrow(raw), nrow(sample_df()))
+})
+
+test_that("deck ZIP includes a chart_<label>.png for favorites with a captured snapshot", {
+  with_favorites_path({
+    dir.create(favorites_assets_dir(), recursive = TRUE, showWarnings = FALSE)
+    # A fake PNG (content doesn't matter for this test -- just that it's
+    # copied into the zip under the right name).
+    writeBin(as.raw(c(0x89, 0x50, 0x4E, 0x47)), favorite_asset_path("with_snap"))
+
+    entries <- list(
+      list(id = "with_snap", label = "Has Snapshot", dashboard_title = "D",
+           tab_label = "T", subtab_label = "S", chart_type = "line",
+           template_name = NA_character_, selections = list(), slide_order = "auto",
+           slide_block = NULL, tc_table = sample_df()),
+      list(id = "no_snap", label = "No Snapshot", dashboard_title = "D",
+           tab_label = "T", subtab_label = "S", chart_type = "line",
+           template_name = NA_character_, selections = list(), slide_order = "auto",
+           slide_block = NULL, tc_table = sample_df())
+    )
+
+    z <- tempfile(fileext = ".zip")
+    favorites_build_deck_zip(z, entries = entries)
+    files <- utils::unzip(z, list = TRUE)$Name
+
+    expect_true("chart_Has Snapshot.png" %in% files)
+    expect_false("chart_No Snapshot.png" %in% files)
+  })
 })
 
 test_that("deck ZIP falls back to template + combined .ppttc when no renderer is available", {
@@ -188,7 +274,7 @@ test_that("deck ZIP falls back to template + combined .ppttc when no renderer is
   files <- utils::unzip(z, list = TRUE)$Name
   expect_true("favorites_deck.ppttc" %in% files)
   expect_true(any(grepl("README_render_deck", files)))
-  expect_true("favorites_table.xlsx" %in% files)
+  expect_true("favorites_thinkcell_tables.xlsx" %in% files)
   expect_true("log.txt" %in% files)
 })
 
