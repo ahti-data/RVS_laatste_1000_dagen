@@ -4,7 +4,7 @@
 #' Deliberately per-dashboard, not per-user (kept simple for now — see
 #' CLAUDE.md). Persisted as a flat JSON file at a path outside every folder
 #' the deploy workflow syncs, so favorites survive a redeploy the same way
-#' `templates/custom/` does (see `utils/template_admin.R`).
+#' `state/template_uploads/` does (see `utils/template_admin.R`).
 #'
 #' A favorite is a *snapshot* of an export taken at star-time (table + a
 #' think-cell slide block + the option selections that produced it), not a
