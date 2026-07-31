@@ -151,6 +151,32 @@ write_tc_xlsx <- function(data, path) {
   writexl::write_xlsx(as.data.frame(data), path)
 }
 
+#' Stamp a think-cell matrix's unused corner header with a log line, for
+#' `.xlsx`-only exports that never go through
+#' [tc_build_ppttc_slide_block()] (e.g. the "Download data (think-cell)"
+#' button) -- so the same provenance info the slide/favorites paths embed in
+#' a chart datasheet's corner cell also travels with the plain workbook a PM
+#' opens in Excel to link into a think-cell chart themselves.
+#'
+#' The corner is column 1's name, which [format_tc_data()] always leaves `""`
+#' by convention (unused by think-cell's own linking), so overwriting it
+#' costs nothing. A faceted workbook (a named list of data frames, one per
+#' facet/sheet) gets the same line stamped onto every sheet.
+#'
+#' @param data A think-cell matrix (data frame) or named list of them.
+#' @param log_line String from [tc_build_datasheet_log()]. `NULL` or empty
+#'   leaves `data` untouched.
+#' @return `data`, with column 1 renamed to `log_line` on every sheet.
+tc_stamp_tc_matrix_corner <- function(data, log_line) {
+  if (is.null(log_line) || !nzchar(trimws(log_line))) return(data)
+  if (is_tc_workbook_list(data)) {
+    return(lapply(data, tc_stamp_tc_matrix_corner, log_line = log_line))
+  }
+  df <- as.data.frame(data, stringsAsFactors = FALSE, check.names = FALSE)
+  if (ncol(df) >= 1) names(df)[1] <- log_line
+  df
+}
+
 normalize_tc_chart_type <- function(chart_type) {
   switch(
     chart_type,

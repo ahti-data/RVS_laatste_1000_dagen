@@ -152,6 +152,32 @@ test_that("facet export writes multi-sheet workbook", {
   expect_gt(file.info(path)$size, 0)
 })
 
+test_that("tc_stamp_tc_matrix_corner renames column 1 (the unused corner) to the log line", {
+  m <- data.frame(lab = c("A", "B"), `2023` = c(1, 2), check.names = FALSE)
+  names(m)[1] <- ""
+  stamped <- tc_stamp_tc_matrix_corner(m, "LOG | dashboard=D")
+  expect_equal(names(stamped)[1], "LOG | dashboard=D")
+  expect_equal(names(stamped)[2], "2023")
+  expect_equal(stamped[[1]], c("A", "B"))
+})
+
+test_that("tc_stamp_tc_matrix_corner stamps every sheet of a faceted workbook", {
+  m <- list(
+    North = data.frame(lab = "A", v = 1, check.names = FALSE),
+    South = data.frame(lab = "B", v = 2, check.names = FALSE)
+  )
+  stamped <- tc_stamp_tc_matrix_corner(m, "LOG | dashboard=D")
+  expect_equal(names(stamped$North)[1], "LOG | dashboard=D")
+  expect_equal(names(stamped$South)[1], "LOG | dashboard=D")
+})
+
+test_that("tc_stamp_tc_matrix_corner leaves data untouched when the log line is NULL or empty", {
+  m <- data.frame(lab = "A", v = 1, check.names = FALSE)
+  names(m)[1] <- ""
+  expect_identical(tc_stamp_tc_matrix_corner(m, NULL), m)
+  expect_identical(tc_stamp_tc_matrix_corner(m, ""), m)
+})
+
 test_that("a factor category column exports in factor-level (plotted) order, not alphabetical", {
   # Levels are the reverse of alphabetical, mimicking a chart that orders bars
   # deliberately (e.g. by value). The export must follow the plotted order.

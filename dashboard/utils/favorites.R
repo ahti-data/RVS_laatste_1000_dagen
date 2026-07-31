@@ -140,6 +140,10 @@ favorites_table_to_storage <- function(df) {
 #' @param template_override Optional explicit template filename/path.
 #' @param slide_order Category order mode (see [tc_order_slide_matrix()]).
 #' @param dashboard_title,tab_label,subtab_label,selections Export log metadata.
+#' @param source_output,source_sheet Optional data-source identifiers (see
+#'   [tc_build_datasheet_log()] in `utils/slide_download.R`), stored on the
+#'   entry so a later deck download can stamp them into this favorite's own
+#'   datasheet corner cell, same as the single-chart download.
 #' @param filename_prefix Prefix used for this chart's downloads.
 #' @param label Optional short display label; defaults to the sub-tab or prefix.
 #' @param templates_dir Optional templates directory override (mainly for tests).
@@ -149,7 +153,8 @@ favorites_capture <- function(
     agg_fun = NULL, category_order = NULL, series_order = NULL, facet_col = NULL,
     slide_title = "", figure_title = "", template_override = "", slide_order = "auto",
     dashboard_title = "", tab_label = "", subtab_label = "",
-    selections = NULL, filename_prefix = "chart", label = NULL, templates_dir = NULL
+    selections = NULL, source_output = NULL, source_sheet = NULL,
+    filename_prefix = "chart", label = NULL, templates_dir = NULL
 ) {
   slide_type   <- chart_type
   slide_matrix <- NULL
@@ -211,6 +216,8 @@ favorites_capture <- function(
     chart_type      = slide_type,
     template_name   = if (!is.na(template_path)) basename(template_path) else NA_character_,
     selections      = selections,
+    source_output   = source_output,
+    source_sheet    = source_sheet,
     slide_order     = slide_order,
     # slide_block embeds an *absolute* template path, only valid for rendering
     # on this same machine (see favorites_build_deck_zip()). slide_title/
@@ -358,7 +365,9 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
             subtab_label    = tc_or(e$subtab_label, ""),
             chart_type      = e$chart_type,
             selections      = e$selections,
-            chart_id        = renderable_ids[[i]]
+            chart_id        = renderable_ids[[i]],
+            source_output   = tc_or(e$source_output, ""),
+            source_sheet    = tc_or(e$source_sheet, "")
           )
         )
       }, character(1))
@@ -389,7 +398,9 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
               subtab_label    = tc_or(e$subtab_label, ""),
               chart_type      = e$chart_type,
               selections      = e$selections,
-              chart_id        = renderable_ids[[i]]
+              chart_id        = renderable_ids[[i]],
+              source_output   = tc_or(e$source_output, ""),
+              source_sheet    = tc_or(e$source_sheet, "")
             )
           )
         }, character(1))

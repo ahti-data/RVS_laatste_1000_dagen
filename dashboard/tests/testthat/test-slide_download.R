@@ -129,6 +129,21 @@ test_that("datasheet log includes chart_id only when supplied", {
   expect_false(grepl("chart_id=", without_id, fixed = TRUE))
 })
 
+test_that("datasheet log always stamps a generation timestamp", {
+  line <- tc_build_datasheet_log("D", "T", "S", "line", list())
+  expect_true(grepl("timestamp=\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", line))
+})
+
+test_that("datasheet log includes source_output/source_sheet only when supplied", {
+  with_source    <- tc_build_datasheet_log("D", "T", "S", "line", list(),
+                                            source_output = "3a", source_sheet = "zvw")
+  without_source <- tc_build_datasheet_log("D", "T", "S", "line", list())
+  expect_true(grepl("output=3a", with_source, fixed = TRUE))
+  expect_true(grepl("sheet=zvw", with_source, fixed = TRUE))
+  expect_false(grepl("output=", without_source, fixed = TRUE))
+  expect_false(grepl("sheet=", without_source, fixed = TRUE))
+})
+
 test_that("a datasheet_log, when supplied, replaces the null corner cell", {
   json <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig",
                                datasheet_log = "LOG | dashboard=D; tab=T")

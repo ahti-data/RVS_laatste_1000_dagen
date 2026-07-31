@@ -86,6 +86,30 @@ Never rely on the default alphabetical order for a chart whose bars are intentio
   `chart_data_downloads_ui()` whenever the chart is Plotly-based, so starring it also captures a
   PNG snapshot for the favorites deck ZIP. Omit it for `renderPlot()`-based charts — the favorite
   still saves, just without an image.
+- This dashboard's chart data is assembled from named pipeline outputs (e.g. `output_src`
+  producing `data/data_iteration_3/iteration_<id>/...` workbooks read by sheet). Pass
+  `source_output`/`source_sheet` to `chart_data_downloads_server()` (and `favorites_capture()`,
+  if the chart supports favoriting) identifying which output/sheet backs that chart, so every
+  export's embedded log (see "Provenance log" below) can be traced back to the exact source, not
+  just the dashboard tab.
+
+## Provenance log
+
+Every export this module offers embeds the same provenance log — dashboard/tab/sub-tab, chart
+type, selected options, a generation timestamp, and (when supplied) `source_output`/
+`source_sheet` — built by `tc_build_datasheet_log()` in `dashboard/utils/slide_download.R`:
+
+- **Slide (+ favorites deck) downloads**: written into the chart's own think-cell *datasheet*,
+  corner cell (row 1, column 1) — the cell think-cell's JSON automation manual documents as
+  unused by the figure, so it rides along invisibly inside the chart element itself and survives
+  the chart being copied to a new slide or deck.
+- **"Download data (think-cell)"**: the same log, stamped onto the *header* of that `.xlsx`'s
+  first (unused, by convention `""`) column instead, via `tc_stamp_tc_matrix_corner()` in
+  `dashboard/utils/format_thinkcell_download.R` — this export never goes through a chart
+  datasheet.
+
+Both are wired automatically inside `chart_data_downloads_server()` — no per-chart work needed
+beyond passing `source_output`/`source_sheet`.
 
 ## Example wiring
 

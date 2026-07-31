@@ -22,10 +22,14 @@ plus the R pipeline that produces its aggregated outputs.
     `utils/export_history.R`) so it can be redownloaded exactly later from the **Export history**
     tab, however long ago it was created. Distinct from favorites: history is automatic and
     complete, favorites are manually curated.
-  - The same selection log also gets written into every exported chart's own think-cell datasheet
-    (row 1, column 1 — a cell think-cell never renders or reads as data), via
-    `tc_build_datasheet_log()` in `utils/slide_download.R`. Unlike `log.txt`, this rides inside the
-    chart element itself, so it survives the chart being copied to a new slide or deck.
+  - The same selection log (plus a generation timestamp and, when wired, `source_output`/
+    `source_sheet` identifiers -- see Conventions below) also gets written into every exported
+    chart's own think-cell datasheet (row 1, column 1 — a cell think-cell never renders or reads
+    as data), via `tc_build_datasheet_log()` in `utils/slide_download.R`. Unlike `log.txt`, this
+    rides inside the chart element itself, so it survives the chart being copied to a new slide or
+    deck. "Download data (think-cell)" (the plain `.xlsx` a PM links into their own chart) carries
+    the same log stamped onto its corner header cell instead, via `tc_stamp_tc_matrix_corner()`
+    in `utils/format_thinkcell_download.R`, since it never goes through a chart datasheet.
   - `template_uploads/` (templates uploaded via the "Manage templates" tab, plus
     `template_uploads/previews/<name>.png`). Uploads live here, not under `templates/`, because
     the Shiny process must be able to write them whereas the deploy-owned `templates/` is
@@ -41,6 +45,12 @@ plus the R pipeline that produces its aggregated outputs.
   with tests before being exposed in the UI (see `dashboard/utils/chart_downloads.R` for the
   wiring pattern, and `.cursor/rules/thinkcell-export.mdc` / `.claude/skills/thinkcell-export`
   for the full export convention).
+- This dashboard's chart data comes from named `output_src` pipeline outputs (e.g.
+  `data/data_iteration_3/iteration_<id>/...`, read by sheet). Pass `source_output`/`source_sheet`
+  when wiring `chart_data_downloads_server()` (and `favorites_capture()`, if the chart supports
+  favoriting) identifying which output/sheet backs that chart -- they ride along in every
+  export's embedded provenance log (see below) so a chart found later can be traced back to the
+  exact source file/sheet, not just the dashboard tab.
 
 ## Running
 

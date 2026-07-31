@@ -175,6 +175,15 @@ chart_data_downloads_ui <- function(
 #' @param category_order,series_order Optional order vectors for think-cell export.
 #' @param waterfall_end_col,waterfall_subtotal_cols Optional waterfall markers.
 #' @param facet_col Optional facet column for `facet_wrap()` / `facet_grid()` plots.
+#' @param source_output,source_sheet Optional data-source identifiers (see
+#'   `tc_build_datasheet_log()` in `utils/slide_download.R`) -- e.g. a
+#'   pipeline output id ("3a") and, within it, a sheet name -- for a
+#'   dashboard whose chart data is assembled from named external outputs.
+#'   Each may be a plain string or a reactive/function (like `slide_title`).
+#'   Stamped into the corner cell/header of every export this chart offers
+#'   (raw download excluded -- it isn't a think-cell matrix), so a chart
+#'   found later can be traced back to its source. Omit both for dashboards
+#'   with no such concept.
 chart_data_downloads_server <- function(
     id,
     data,
@@ -191,7 +200,9 @@ chart_data_downloads_server <- function(
     facet_col = NULL,
     slide_title = NULL,
     figure_title = NULL,
-    template_override = NULL
+    template_override = NULL,
+    source_output = NULL,
+    source_sheet = NULL
 ) {
   shiny::moduleServer(id, function(input, output, session) {
     resolve_opt <- function(x) {
@@ -351,7 +362,22 @@ chart_data_downloads_server <- function(
             waterfall_subtotal_cols = waterfall_subtotal_cols,
             facet_col = facet_col
           )
-          write_tc_xlsx(tc_data, file)
+
+          # Same corner-cell provenance idea as the slide/favorites downloads
+          # (see tc_build_ppttc_slide_block()), just stamped onto the plain
+          # workbook's own header instead of a ppttc chart datasheet, since
+          # this export never goes through ppttc.exe. No chart_id: this
+          # download isn't logged to Export History.
+          log_line <- tc_build_datasheet_log(
+            dashboard_title = tc_ctx_dashboard_title(),
+            tab_label       = tc_ctx_active_tab(),
+            subtab_label    = tc_ctx_active_subtab(),
+            chart_type      = resolved_chart_type,
+            selections      = tc_ctx_selections(module_id = id),
+            source_output   = resolve_opt(source_output),
+            source_sheet    = resolve_opt(source_sheet)
+          )
+          write_tc_xlsx(tc_stamp_tc_matrix_corner(tc_data, log_line), file)
         }
       )
     }
@@ -446,6 +472,8 @@ chart_data_downloads_server <- function(
           resolved_tab          <- tc_ctx_active_tab()
           resolved_subtab       <- tc_ctx_active_subtab()
           resolved_selections   <- tc_ctx_selections(module_id = id)
+          resolved_source_output <- resolve_opt(source_output)
+          resolved_source_sheet  <- resolve_opt(source_sheet)
 
           # Auto-log this export to the shared Export history tab (see
           # utils/export_history.R), using exactly these already-resolved
@@ -467,6 +495,8 @@ chart_data_downloads_server <- function(
               tab_label         = resolved_tab,
               subtab_label      = resolved_subtab,
               selections        = resolved_selections,
+              source_output     = resolved_source_output,
+              source_sheet      = resolved_source_sheet,
               filename_prefix   = filename_prefix
             )
             history_entry$id <- export_history_new_id()
@@ -484,6 +514,8 @@ chart_data_downloads_server <- function(
             tab_label         = resolved_tab,
             subtab_label      = resolved_subtab,
             selections        = resolved_selections,
+            source_output     = resolved_source_output,
+            source_sheet      = resolved_source_sheet,
             filename_prefix   = filename_prefix,
             template_override = resolved_template_ovr,
             slide_order       = resolved_slide_order,
@@ -513,6 +545,8 @@ chart_data_downloads_server <- function(
           tab_label         = tc_ctx_active_tab(),
           subtab_label      = tc_ctx_active_subtab(),
           selections        = tc_ctx_selections(module_id = id),
+          source_output     = resolve_opt(source_output),
+          source_sheet      = resolve_opt(source_sheet),
           filename_prefix   = filename_prefix
         )
         fav_id <- favorites_add(entry)

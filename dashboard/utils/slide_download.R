@@ -709,25 +709,46 @@ tc_format_selections <- function(selections) {
 }
 
 #' Build the single-line selection log embedded in the chart datasheet's
-#' corner cell (see [tc_build_ppttc_slide_block()]). Reuses the exact same
-#' dashboard/tab/subtab/selection values as [tc_build_log()] (log.txt) via
-#' [tc_selection_kv_pairs()], just formatted as one delimited line instead of
-#' a multi-section text file, since a datasheet cell is one line/field.
+#' corner cell (see [tc_build_ppttc_slide_block()]), and, via
+#' [tc_stamp_tc_matrix_corner()], the corner header of a plain think-cell
+#' `.xlsx` export. Reuses the exact same dashboard/tab/subtab/selection
+#' values as [tc_build_log()] (log.txt) via [tc_selection_kv_pairs()], just
+#' formatted as one delimited line instead of a multi-section text file,
+#' since a datasheet cell is one line/field. Always stamps its own
+#' generation timestamp (like [tc_build_log()]'s "Generated:" line), so a
+#' chart found later in a deck can be dated without cross-referencing
+#' anything else.
 #' @param chart_id Optional export-history chart id, included as its own
-#'   `chart_id=` field when supplied.
+#'   `chart_id=` field when supplied. Omitted for exports that aren't logged
+#'   to Export History (e.g. the plain "Download data (think-cell)" button).
+#' @param source_output,source_sheet Optional identifiers naming the
+#'   underlying data source this chart's numbers came from -- e.g. a
+#'   pipeline output id ("3a") and, within it, a sheet name -- for a
+#'   dashboard whose data is assembled from named external outputs. Included
+#'   as `output=`/`sheet=` fields when supplied; omit both for dashboards
+#'   with no such concept (the default, and this template's own scaffold).
 #' @return A single-line character string, e.g.
-#'   `"LOG | dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
+#'   `"LOG | timestamp=...; chart_id=...; output=...; sheet=...; dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
 tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
-                                   chart_type, selections, chart_id = NULL) {
+                                   chart_type, selections, chart_id = NULL,
+                                   source_output = NULL, source_sheet = NULL) {
+  parts <- c(sprintf("timestamp=%s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
+  if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
+    parts <- c(parts, sprintf("chart_id=%s", chart_id))
+  }
+  if (!is.null(source_output) && nzchar(trimws(tc_or(source_output, "")))) {
+    parts <- c(parts, sprintf("output=%s", source_output))
+  }
+  if (!is.null(source_sheet) && nzchar(trimws(tc_or(source_sheet, "")))) {
+    parts <- c(parts, sprintf("sheet=%s", source_sheet))
+  }
   parts <- c(
+    parts,
     sprintf("dashboard=%s", tc_or(dashboard_title, "")),
     sprintf("tab=%s", tc_or(tab_label, "")),
     sprintf("sub-tab=%s", tc_or(subtab_label, "")),
     sprintf("chart_type=%s", tc_or(chart_type, ""))
   )
-  if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
-    parts <- c(parts, sprintf("chart_id=%s", chart_id))
-  }
   pairs <- tc_selection_kv_pairs(selections)
   if (length(pairs) > 0) {
     parts <- c(parts, vapply(pairs, function(p) sprintf("%s=%s", p$name, p$value), character(1)))
@@ -800,6 +821,9 @@ tc_build_log <- function(dashboard_title, tab_label, subtab_label, selections,
 #'   [tc_build_ppttc_slide_block()] and [tc_build_log()]); passed straight
 #'   through to both, so callers not using `utils/export_history.R` can just
 #'   omit it (default `NULL`, identical to today's behavior).
+#' @param source_output,source_sheet Optional data-source identifiers (see
+#'   [tc_build_datasheet_log()]) -- passed straight through to the chart
+#'   datasheet's corner-cell log, nowhere else.
 #' @return list(zip_path, rendered, template, note) invisibly.
 tc_build_slide_zip <- function(zip_path,
                                tc_data,
@@ -817,7 +841,9 @@ tc_build_slide_zip <- function(zip_path,
                                slide_matrix     = NULL,
                                slide_order      = "auto",
                                write_table_fun  = write_tc_xlsx,
-                               chart_id         = NULL) {
+                               chart_id         = NULL,
+                               source_output    = NULL,
+                               source_sheet     = NULL) {
 
   resolved_type <- normalize_tc_chart_type(chart_type)
   template_path <- tc_template_for_chart_type(resolved_type, templates_dir, template_override)
@@ -862,7 +888,9 @@ tc_build_slide_zip <- function(zip_path,
     subtab_label    = subtab_label,
     chart_type      = chart_type,
     selections      = selections,
-    chart_id        = chart_id
+    chart_id        = chart_id,
+    source_output   = source_output,
+    source_sheet    = source_sheet
   )
 
   if (!has_template) {

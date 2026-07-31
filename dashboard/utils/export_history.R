@@ -106,6 +106,10 @@ export_history_remove <- function(id) {
 #'   whatever exists at that time.
 #' @param slide_order Resolved category order mode.
 #' @param dashboard_title,tab_label,subtab_label,selections Export log metadata.
+#' @param source_output,source_sheet Optional data-source identifiers (see
+#'   `tc_build_datasheet_log()` in `utils/slide_download.R`), stored on the
+#'   entry so a redownload stamps the same values into the datasheet corner
+#'   cell as the original export did.
 #' @param filename_prefix Prefix used for this chart's downloads.
 #' @param templates_dir Optional templates directory override (mainly for tests).
 #' @return A list ready for [export_history_add()].
@@ -113,7 +117,8 @@ tc_history_capture <- function(
     tc_data, chart_type, slide_matrix = NULL,
     slide_title = "", figure_title = "", template_override = "", slide_order = "auto",
     dashboard_title = "", tab_label = "", subtab_label = "",
-    selections = NULL, filename_prefix = "chart", templates_dir = NULL
+    selections = NULL, source_output = NULL, source_sheet = NULL,
+    filename_prefix = "chart", templates_dir = NULL
 ) {
   override <- if (nzchar(tc_or(template_override, ""))) template_override else NULL
   template_path <- tc_template_for_chart_type(chart_type, templates_dir = templates_dir, override = override)
@@ -130,6 +135,8 @@ tc_history_capture <- function(
     template_name     = if (!is.na(template_path)) basename(template_path) else NA_character_,
     template_override = tc_or(template_override, ""),
     selections        = selections,
+    source_output     = source_output,
+    source_sheet      = source_sheet,
     slide_order       = slide_order,
     slide_title       = slide_title,
     figure_title      = figure_title,
@@ -158,6 +165,8 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
     tab_label         = tc_or(entry$tab_label, ""),
     subtab_label      = tc_or(entry$subtab_label, ""),
     selections        = entry$selections,
+    source_output     = tc_or(entry$source_output, ""),
+    source_sheet      = tc_or(entry$source_sheet, ""),
     filename_prefix   = tc_or(entry$filename_prefix, "chart"),
     templates_dir     = templates_dir,
     template_override = tc_or(entry$template_override, ""),
