@@ -146,6 +146,7 @@ chart_data_downloads_ui <- function(
             selected = "auto"
           ),
           shiny::uiOutput(ns("slide_template_info")),
+          shiny::uiOutput(ns("slide_template_preview")),
           shiny::tags$div(
             `data-plot-output-id` = plot_output_id,
             shiny::actionButton(ns("favorite"), favorite_label,
@@ -278,6 +279,37 @@ chart_data_downloads_server <- function(
         style = "font-size:12px; color:#374151;",
         label, shiny::tags$strong(info$name), warn
       )
+    })
+
+    # Inline preview of the effective template (auto-detected or manually
+    # chosen), so a PM can tell templates apart without leaving the chart tab
+    # to check the Manage Templates list. Same tc_preview_data_uri() lookup
+    # that tab uses; a template with no curated/uploaded preview just shows a
+    # placeholder, never an error (see utils/slide_download.R).
+    output$slide_template_preview <- shiny::renderUI({
+      info <- tryCatch(slide_chosen_template(), error = function(e) NULL)
+      if (is.null(info) || is.na(info$name)) return(NULL)
+      uri <- tc_preview_data_uri(info$name)
+      if (!is.na(uri)) {
+        shiny::tags$img(
+          src = uri, alt = paste("Preview van", info$name),
+          style = paste(
+            "display:block; margin-top:6px; width:160px; height:auto;",
+            "max-height:110px; object-fit:contain; background:#fff;",
+            "border:1px solid #E4E7EE; border-radius:4px;"
+          )
+        )
+      } else {
+        shiny::tags$div(
+          style = paste(
+            "display:flex; align-items:center; justify-content:center;",
+            "margin-top:6px; width:160px; height:70px; background:#F7F8FA;",
+            "border:1px dashed #D1D5DB; border-radius:4px; font-size:11px;",
+            "color:#9CA3AF; text-align:center;"
+          ),
+          "No preview"
+        )
+      }
     })
 
     output$raw <- shiny::downloadHandler(
