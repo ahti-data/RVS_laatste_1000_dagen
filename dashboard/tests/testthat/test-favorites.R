@@ -3,6 +3,7 @@ library(testthat)
 source(file.path("..", "..", "utils", "format_thinkcell_download.R"))
 source(file.path("..", "..", "utils", "slide_download.R"))
 source(file.path("..", "..", "utils", "favorites.R"))
+source(file.path("..", "..", "utils", "export_history.R"))
 
 templates_dir <- file.path("..", "..", "templates")
 have_templates <- dir.exists(templates_dir)
@@ -14,6 +15,17 @@ with_favorites_path <- function(code) {
   on.exit({
     if (is.na(old)) Sys.unsetenv("SHINY_FAVORITES_PATH") else Sys.setenv(SHINY_FAVORITES_PATH = old)
     unlink(path)
+  }, add = TRUE)
+  force(code)
+}
+
+with_history_dir <- function(code) {
+  dir <- tempfile("export_history_")
+  old <- Sys.getenv("SHINY_EXPORT_HISTORY_DIR", unset = NA)
+  Sys.setenv(SHINY_EXPORT_HISTORY_DIR = dir)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("SHINY_EXPORT_HISTORY_DIR") else Sys.setenv(SHINY_EXPORT_HISTORY_DIR = old)
+    unlink(dir, recursive = TRUE)
   }, add = TRUE)
   force(code)
 }
@@ -211,6 +223,7 @@ test_that("deck ZIP combines table + log for favorites without a template", {
 test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one", {
   skip_if_not(have_templates, "templates directory not available")
   skip_if_not_installed("readxl")
+  with_history_dir({
   z <- tempfile(fileext = ".zip")
   entry <- favorites_capture(
     data = sample_df(), chart_type = "stacked_bar",
@@ -232,6 +245,7 @@ test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one"
   # think-cell pivoted matrix.
   expect_true(all(c("quarter", "product", "revenue") %in% names(raw)))
   expect_equal(nrow(raw), nrow(sample_df()))
+  })
 })
 
 test_that("deck ZIP includes a chart_<label>.png for favorites with a captured snapshot", {
@@ -263,6 +277,7 @@ test_that("deck ZIP includes a chart_<label>.png for favorites with a captured s
 
 test_that("deck ZIP falls back to template + combined .ppttc when no renderer is available", {
   skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
   z <- tempfile(fileext = ".zip")
   entry <- favorites_capture(
     data = sample_df(), chart_type = "stacked_bar",
@@ -276,6 +291,7 @@ test_that("deck ZIP falls back to template + combined .ppttc when no renderer is
   expect_true(any(grepl("README_render_deck", files)))
   expect_true("favorites_thinkcell_tables.xlsx" %in% files)
   expect_true("log.txt" %in% files)
+  })
 })
 
 test_that("the fallback deck .ppttc references co-located templates, not the absolute capture-time path", {
@@ -285,6 +301,7 @@ test_that("the fallback deck .ppttc references co-located templates, not the abs
   # must instead reference each template by the bare file name copied
   # alongside it.
   skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
   z <- tempfile(fileext = ".zip")
   entry <- favorites_capture(
     data = sample_df(), chart_type = "stacked_bar",
@@ -304,11 +321,85 @@ test_that("the fallback deck .ppttc references co-located templates, not the abs
 
   expect_true(grepl(sprintf('"template":"%s"', entry$template_name), ppttc, fixed = TRUE))
   expect_false(grepl(captured_template_value, ppttc, fixed = TRUE))
+  })
+})
+
+test_that("downloading a favorites deck auto-logs each renderable favorite to Export History", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- favorites_capture(
+      data = sample_df(), chart_type = "stacked_bar",
+      category_col = "quarter", series_col = "product", value_col = "revenue",
+      agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir
+    )
+
+    expect_equal(export_history_list(), list())
+
+    z <- tempfile(fileext = ".zip")
+    favorites_build_deck_zip(z, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+
+    history <- export_history_list()
+    expect_length(history, 1)
+    expect_equal(history[[1]]$subtab_label, "Revenue")
+    expect_equal(history[[1]]$chart_type, "stacked_bar")
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    log_txt <- paste(readLines(file.path(extract_dir, "log.txt")), collapse = "\n")
+    expect_true(grepl(paste0("Chart ID:       ", history[[1]]$id), log_txt, fixed = TRUE))
+
+    ppttc <- paste(readLines(file.path(extract_dir, "favorites_deck.ppttc")), collapse = "\n")
+    expect_true(grepl(sprintf('"string":"%s"', history[[1]]$id), ppttc, fixed = TRUE))
+  })
+})
+
+test_that("each favorites-deck download mints a fresh history entry, not a reused one", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- favorites_capture(
+      data = sample_df(), chart_type = "stacked_bar",
+      category_col = "quarter", series_col = "product", value_col = "revenue",
+      agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir
+    )
+
+    z1 <- tempfile(fileext = ".zip")
+    favorites_build_deck_zip(z1, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+    z2 <- tempfile(fileext = ".zip")
+    favorites_build_deck_zip(z2, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+
+    history <- export_history_list()
+    expect_length(history, 2)
+    expect_false(identical(history[[1]]$id, history[[2]]$id))
+  })
+})
+
+test_that("a favorite with no matching template is not logged to Export History", {
+  with_history_dir({
+    entry <- favorites_capture(
+      data = data.frame(category = "CT", series = "A", v = 1, stringsAsFactors = FALSE),
+      chart_type = "waterfall",
+      category_col = "category", series_col = "series", value_col = "v",
+      templates_dir = templates_dir
+    )
+    expect_null(entry$slide_block)
+
+    z <- tempfile(fileext = ".zip")
+    favorites_build_deck_zip(z, entries = list(entry))
+    expect_equal(export_history_list(), list())
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    log_txt <- paste(readLines(file.path(extract_dir, "log.txt")), collapse = "\n")
+    expect_false(grepl("Chart ID:", log_txt, fixed = TRUE))
+  })
 })
 
 test_that("a working ppttc executable renders one combined deck for multiple favorites", {
   skip_if_not(have_templates, "templates directory not available")
   skip_on_os("windows")  # stub is a POSIX shell script
+  with_history_dir({
   exe <- tempfile(fileext = ".sh")
   writeLines(c("#!/bin/sh", 'out="$3"; printf "PK\\003\\004" > "$out"'), exe)
   Sys.chmod(exe, "0755")
@@ -325,4 +416,5 @@ test_that("a working ppttc executable renders one combined deck for multiple fav
   files <- utils::unzip(z, list = TRUE)$Name
   expect_true("favorites_deck.pptx" %in% files)
   expect_false(any(grepl("README_render_deck", files)))
+  })
 })

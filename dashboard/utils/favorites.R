@@ -239,6 +239,12 @@ favorites_capture <- function(
 #' the same graceful template+`.ppttc`+README fallback [tc_build_slide_zip()]
 #' uses when no renderer is available.
 #'
+#' Every renderable favorite is also auto-logged to Export History
+#' (`utils/export_history.R`) -- one fresh entry + chart id per call, the
+#' same as the single-chart "Download slide" button (favorite content never
+#' changes after starring, so there's no staleness risk in always minting a
+#' fresh id rather than trying to reuse one from an earlier download).
+#'
 #' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
 #' @param entries Favorites to include; defaults to every saved favorite.
 #' @param ppttc_exe Optional override for the think-cell executable.
@@ -296,11 +302,59 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
     renderable <- Filter(function(e) !is.null(e$slide_block) && nzchar(tc_or(e$slide_block, "")), entries)
     rendered <- FALSE
 
-    if (length(renderable) > 0) {
-      ppttc_json <- sprintf(
-        "[%s]",
-        paste(vapply(renderable, function(e) e$slide_block, character(1)), collapse = ",")
+    # Auto-log every renderable favorite to Export History (state/export_
+    # history/) -- one fresh entry + chart id per "Download all favorites"
+    # click, same as the single-chart "Download slide" button, reusing the
+    # same per-chart capture/store functions (utils/export_history.R). A
+    # favorite already has everything tc_history_capture() needs, so this is
+    # a direct mapping, not a re-derivation. Matched by position to `entries`
+    # (NA for favorites with no usable template) so it lines up with the log
+    # loop below too.
+    chart_ids <- rep(NA_character_, length(entries))
+    for (i in seq_along(entries)) {
+      e <- entries[[i]]
+      if (is.null(e$slide_block) || !nzchar(tc_or(e$slide_block, ""))) next
+      history_entry <- tc_history_capture(
+        tc_data           = favorites_table_as_df(e$tc_table),
+        chart_type        = e$chart_type,
+        slide_matrix      = favorites_table_as_df(e$tc_table),
+        slide_title       = tc_or(e$slide_title, ""),
+        figure_title      = tc_or(e$figure_title, ""),
+        template_override = tc_or(e$template_name, ""),
+        slide_order       = tc_or(e$slide_order, "auto"),
+        dashboard_title   = tc_or(e$dashboard_title, ""),
+        tab_label         = tc_or(e$tab_label, ""),
+        subtab_label      = tc_or(e$subtab_label, ""),
+        selections        = e$selections,
+        filename_prefix   = tc_or(e$filename_prefix, "chart"),
+        templates_dir     = templates_dir
       )
+      history_entry$id <- export_history_new_id()
+      chart_ids[i] <- export_history_add(history_entry)
+    }
+    renderable_ids <- chart_ids[vapply(entries, function(e) {
+      !is.null(e$slide_block) && nzchar(tc_or(e$slide_block, ""))
+    }, logical(1))]
+
+    if (length(renderable) > 0) {
+      # Rebuilt fresh per favorite (not the frozen e$slide_block) so each
+      # slide's ppttc data carries its own just-minted chart id -- resolving
+      # the template path fresh here also means an immediate render always
+      # uses whatever the template currently is, not a possibly-stale
+      # star-time path.
+      render_blocks <- vapply(seq_along(renderable), function(i) {
+        e <- renderable[[i]]
+        tpl_path <- tc_template_for_chart_type(
+          e$chart_type, templates_dir = templates_dir, override = tc_or(e$template_name, "")
+        )
+        tpl_ref <- if (!is.na(tpl_path)) tc_short_path(tpl_path) else tc_or(e$template_name, "")
+        tc_build_ppttc_slide_block(
+          favorites_table_as_df(e$tc_table), tpl_ref,
+          tc_or(e$slide_title, ""), tc_or(e$figure_title, ""),
+          chart_id = renderable_ids[[i]]
+        )
+      }, character(1))
+      ppttc_json <- sprintf("[%s]", paste(render_blocks, collapse = ","))
       exe <- tc_or(ppttc_exe, tc_find_ppttc_exe())
 
       if (!is.null(exe) && !is.na(exe) && nzchar(exe)) {
@@ -315,10 +369,12 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
         # tc_build_slide_zip()). The shipped .ppttc must instead reference each
         # template by the bare file name it's copied under below, so rebuild a
         # portable block per favorite rather than reusing slide_block as-is.
-        portable_blocks <- vapply(renderable, function(e) {
+        portable_blocks <- vapply(seq_along(renderable), function(i) {
+          e <- renderable[[i]]
           tc_build_ppttc_slide_block(
             favorites_table_as_df(e$tc_table), tc_or(e$template_name, ""),
-            tc_or(e$slide_title, ""), tc_or(e$figure_title, "")
+            tc_or(e$slide_title, ""), tc_or(e$figure_title, ""),
+            chart_id = renderable_ids[[i]]
           )
         }, character(1))
         portable_json <- sprintf("[%s]", paste(portable_blocks, collapse = ","))
@@ -344,7 +400,8 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
       ), file.path(work, "NO_TEMPLATE.txt"))
     }
 
-    log_txt <- paste(vapply(entries, function(e) {
+    log_txt <- paste(vapply(seq_along(entries), function(i) {
+      e <- entries[[i]]
       tc_build_log(
         dashboard_title = e$dashboard_title,
         tab_label       = e$tab_label,
@@ -354,6 +411,7 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
         template_file   = tc_or(e$template_name, NA_character_),
         rendered        = rendered,
         order_mode      = e$slide_order,
+        chart_id        = if (is.na(chart_ids[i])) NULL else chart_ids[i],
         note            = if (is.na(tc_or(e$template_name, NA_character_))) {
           "No matching template was available when this was starred."
         } else {
