@@ -108,6 +108,40 @@ test_that("no Chart ID line when chart_id is omitted", {
   expect_false(grepl("Chart ID:", log))
 })
 
+test_that("datasheet log is one delimited line built from the same fields as log.txt", {
+  line <- tc_build_datasheet_log(
+    "Laatste 1000 dagen", "Iteratie 1", "Zorg Totaal", "grouped_bar",
+    list(tot_pop = "all", tot_variables = c("a", "b"))
+  )
+  expect_false(grepl("\n", line))
+  expect_true(startsWith(line, "LOG | "))
+  expect_true(grepl("dashboard=Laatste 1000 dagen", line, fixed = TRUE))
+  expect_true(grepl("tab=Iteratie 1", line, fixed = TRUE))
+  expect_true(grepl("sub-tab=Zorg Totaal", line, fixed = TRUE))
+  expect_true(grepl("chart_type=grouped_bar", line, fixed = TRUE))
+  expect_true(grepl("tot_variables=a, b", line, fixed = TRUE))
+})
+
+test_that("datasheet log includes chart_id only when supplied", {
+  with_id    <- tc_build_datasheet_log("D", "T", "S", "line", list(), chart_id = "exp_xyz789")
+  without_id <- tc_build_datasheet_log("D", "T", "S", "line", list())
+  expect_true(grepl("chart_id=exp_xyz789", with_id, fixed = TRUE))
+  expect_false(grepl("chart_id=", without_id, fixed = TRUE))
+})
+
+test_that("a datasheet_log, when supplied, replaces the null corner cell", {
+  json <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig",
+                               datasheet_log = "LOG | dashboard=D; tab=T")
+  expect_true(grepl('"string":"LOG | dashboard=D; tab=T"', json, fixed = TRUE))
+})
+
+test_that("the corner cell stays null when datasheet_log is omitted or empty", {
+  json1 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig")
+  json2 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig", datasheet_log = "")
+  expect_true(grepl("^\\[\\{.*\\[\\[null,", json1))
+  expect_true(grepl("^\\[\\{.*\\[\\[null,", json2))
+})
+
 # ---- ZIP assembly (stub the xlsx writer to avoid a writexl dependency) ------
 stub_writer <- function(data, path) writeLines("stub", path)
 
@@ -160,6 +194,30 @@ test_that("a chart_id passed to tc_build_slide_zip lands in both log.txt and the
   ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
   expect_true(grepl('"ChartID"', ppttc))
   expect_true(grepl('"string":"exp_history42"', ppttc, fixed = TRUE))
+})
+
+test_that("tc_build_slide_zip embeds the selection log in the shipped .ppttc's datasheet corner cell", {
+  skip_if_not(have_templates, "templates directory not available")
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "line",
+    dashboard_title = "Laatste 1000 dagen", tab_label = "Iteratie 1", subtab_label = "Zorg Totaal",
+    selections = list(tot_pop = "all"),
+    filename_prefix = "iter1_tijd", templates_dir = templates_dir,
+    ppttc_exe = NA, write_table_fun = stub_writer, chart_id = "exp_history42"
+  )
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
+
+  # Corner cell (table[0][0]) carries the log, not null; the figure's actual
+  # categories/values are unaffected -- confirmed via the existing chart_id
+  # coverage above still passing, plus the presence of the sample data below.
+  expect_true(grepl('"table":\\[\\[\\{"string":"LOG \\| dashboard=Laatste 1000 dagen', ppttc))
+  expect_true(grepl("tab=Iteratie 1", ppttc, fixed = TRUE))
+  expect_true(grepl("sub-tab=Zorg Totaal", ppttc, fixed = TRUE))
+  expect_true(grepl("chart_id=exp_history42", ppttc, fixed = TRUE))
+  expect_true(grepl('\\{"number":42\\}', ppttc))
 })
 
 test_that("the fallback .ppttc references the co-located template, not the absolute path used to resolve it", {

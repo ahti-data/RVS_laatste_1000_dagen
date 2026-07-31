@@ -588,14 +588,24 @@ tc_prepare_slide <- function(df, chart_type, category_col, series_col, value_col
 #'   slide, months after the fact -- no export-history-specific work is
 #'   required here beyond adding one more named data block, harmless (ignored
 #'   by think-cell) for any template that hasn't bound the field yet.
+#' @param datasheet_log Optional selection-log string written into the
+#'   *chart's own datasheet*, corner cell (row 1, column 1) -- see
+#'   [tc_build_datasheet_log()]. That cell precedes the category labels, so
+#'   think-cell never renders it or reads it as data; it just rides along
+#'   inside the chart element itself (not a linked Excel range), so it
+#'   survives copy-pasting the chart to a new slide or deck. Purely
+#'   provenance, not tamper-proof -- anyone opening the datasheet can see or
+#'   edit it.
 #' @return A single JSON object string (not wrapped in `[...]`).
-tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_title = "", chart_id = NULL) {
+tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_title = "",
+                                        chart_id = NULL, datasheet_log = NULL) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
   if (ncol(df) < 2) {
     stop("think-cell matrix needs at least a label column and one value column.", call. = FALSE)
   }
-  cats   <- names(df)[-1]
-  header <- tc_json_row(c("null", vapply(cats, tc_cell_label, character(1))))
+  cats <- names(df)[-1]
+  corner <- if (nzchar(trimws(tc_or(datasheet_log, "")))) tc_cell_label(datasheet_log) else "null"
+  header <- tc_json_row(c(corner, vapply(cats, tc_cell_label, character(1))))
   series <- vapply(seq_len(nrow(df)), function(i) {
     label  <- tc_cell_label(df[[1]][i])
     values <- vapply(df[i, -1, drop = FALSE], tc_cell_value, character(1))
@@ -627,8 +637,9 @@ tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_ti
 #' Build the think-cell `.ppttc` JSON for one slide.
 #' @inheritParams tc_build_ppttc_slide_block
 #' @return A single JSON string (a one-element array).
-tc_build_ppttc_json <- function(df, template, slide_title = "", figure_title = "", chart_id = NULL) {
-  sprintf("[%s]", tc_build_ppttc_slide_block(df, template, slide_title, figure_title, chart_id))
+tc_build_ppttc_json <- function(df, template, slide_title = "", figure_title = "",
+                                chart_id = NULL, datasheet_log = NULL) {
+  sprintf("[%s]", tc_build_ppttc_slide_block(df, template, slide_title, figure_title, chart_id, datasheet_log))
 }
 
 # ---------------------------------------------------------------------------
@@ -674,20 +685,54 @@ tc_render_pptx_ppttc <- function(json, out_pptx, exe) {
 # ---------------------------------------------------------------------------
 # Log file
 # ---------------------------------------------------------------------------
-tc_format_selections <- function(selections) {
-  if (is.null(selections) || length(selections) == 0) return("  (none captured)")
+#' Derive `name = value` pairs from a selections list -- the single source of
+#' truth for both [tc_format_selections()] (log.txt) and
+#' [tc_build_datasheet_log()] (the datasheet A1 cell), so the two can never
+#' disagree about which options were selected or how multi-value ones join.
+#' @return A list of `list(name, value)`, or `list()` if there's nothing.
+tc_selection_kv_pairs <- function(selections) {
+  if (is.null(selections) || length(selections) == 0) return(list())
   nm <- names(selections)
   if (is.null(nm)) nm <- paste0("option_", seq_along(selections))
-  lines <- vapply(seq_along(selections), function(i) {
+  lapply(seq_along(selections), function(i) {
     v <- selections[[i]]
-    if (is.null(v) || length(v) == 0) {
-      v <- ""
-    } else {
-      v <- paste(as.character(v), collapse = ", ")
-    }
-    sprintf("  - %s: %s", nm[[i]], v)
-  }, character(1))
+    v <- if (is.null(v) || length(v) == 0) "" else paste(as.character(v), collapse = ", ")
+    list(name = nm[[i]], value = v)
+  })
+}
+
+tc_format_selections <- function(selections) {
+  pairs <- tc_selection_kv_pairs(selections)
+  if (length(pairs) == 0) return("  (none captured)")
+  lines <- vapply(pairs, function(p) sprintf("  - %s: %s", p$name, p$value), character(1))
   paste(lines, collapse = "\n")
+}
+
+#' Build the single-line selection log embedded in the chart datasheet's
+#' corner cell (see [tc_build_ppttc_slide_block()]). Reuses the exact same
+#' dashboard/tab/subtab/selection values as [tc_build_log()] (log.txt) via
+#' [tc_selection_kv_pairs()], just formatted as one delimited line instead of
+#' a multi-section text file, since a datasheet cell is one line/field.
+#' @param chart_id Optional export-history chart id, included as its own
+#'   `chart_id=` field when supplied.
+#' @return A single-line character string, e.g.
+#'   `"LOG | dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
+tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
+                                   chart_type, selections, chart_id = NULL) {
+  parts <- c(
+    sprintf("dashboard=%s", tc_or(dashboard_title, "")),
+    sprintf("tab=%s", tc_or(tab_label, "")),
+    sprintf("sub-tab=%s", tc_or(subtab_label, "")),
+    sprintf("chart_type=%s", tc_or(chart_type, ""))
+  )
+  if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
+    parts <- c(parts, sprintf("chart_id=%s", chart_id))
+  }
+  pairs <- tc_selection_kv_pairs(selections)
+  if (length(pairs) > 0) {
+    parts <- c(parts, vapply(pairs, function(p) sprintf("%s=%s", p$name, p$value), character(1)))
+  }
+  paste0("LOG | ", paste(parts, collapse = "; "))
 }
 
 #' Assemble the human-readable export log.
@@ -809,6 +854,17 @@ tc_build_slide_zip <- function(zip_path,
 
   rendered <- FALSE
 
+  # Same values that feed log.txt below, just formatted as one line for the
+  # chart datasheet's corner cell (see tc_build_ppttc_slide_block()).
+  datasheet_log <- tc_build_datasheet_log(
+    dashboard_title = dashboard_title,
+    tab_label       = tab_label,
+    subtab_label    = subtab_label,
+    chart_type      = chart_type,
+    selections      = selections,
+    chart_id        = chart_id
+  )
+
   if (!has_template) {
     # No suitable template: still give the user the data + a clear explanation.
     note <- paste(c(
@@ -824,7 +880,7 @@ tc_build_slide_zip <- function(zip_path,
   } else {
     # ---- (3) slide ----------------------------------------------------------
     if (!nzchar(trimws(tc_or(slide_title, "")))) slide_title <- tc_or(subtab_label, "")
-    json <- tc_build_ppttc_json(slide_matrix, tc_short_path(template_path), slide_title, figure_title, chart_id)
+    json <- tc_build_ppttc_json(slide_matrix, tc_short_path(template_path), slide_title, figure_title, chart_id, datasheet_log)
     exe  <- tc_or(ppttc_exe, tc_find_ppttc_exe())
 
     if (!is.null(exe) && !is.na(exe) && nzchar(exe)) {
@@ -852,7 +908,7 @@ tc_build_slide_zip <- function(zip_path,
       # their own PC has no such path; think-cell needs "slide_template.pptx"
       # sitting right next to chart_data.ppttc, not a server path it can't reach.
       file.copy(template_path, file.path(work, "slide_template.pptx"), overwrite = TRUE)
-      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title, chart_id)
+      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title, chart_id, datasheet_log)
       writeLines(portable_json, file.path(work, "chart_data.ppttc"), useBytes = TRUE)
       writeLines(paste0(
         "think-cell was not available to render the slide automatically on this machine.\n",

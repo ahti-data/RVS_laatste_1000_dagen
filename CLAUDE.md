@@ -22,6 +22,10 @@ plus the R pipeline that produces its aggregated outputs.
     `utils/export_history.R`) so it can be redownloaded exactly later from the **Export history**
     tab, however long ago it was created. Distinct from favorites: history is automatic and
     complete, favorites are manually curated.
+  - The same selection log also gets written into every exported chart's own think-cell datasheet
+    (row 1, column 1 — a cell think-cell never renders or reads as data), via
+    `tc_build_datasheet_log()` in `utils/slide_download.R`. Unlike `log.txt`, this rides inside the
+    chart element itself, so it survives the chart being copied to a new slide or deck.
   - `template_uploads/` (templates uploaded via the "Manage templates" tab, plus
     `template_uploads/previews/<name>.png`). Uploads live here, not under `templates/`, because
     the Shiny process must be able to write them whereas the deploy-owned `templates/` is

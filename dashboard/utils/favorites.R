@@ -351,7 +351,15 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
         tc_build_ppttc_slide_block(
           favorites_table_as_df(e$tc_table), tpl_ref,
           tc_or(e$slide_title, ""), tc_or(e$figure_title, ""),
-          chart_id = renderable_ids[[i]]
+          chart_id = renderable_ids[[i]],
+          datasheet_log = tc_build_datasheet_log(
+            dashboard_title = tc_or(e$dashboard_title, ""),
+            tab_label       = tc_or(e$tab_label, ""),
+            subtab_label    = tc_or(e$subtab_label, ""),
+            chart_type      = e$chart_type,
+            selections      = e$selections,
+            chart_id        = renderable_ids[[i]]
+          )
         )
       }, character(1))
       ppttc_json <- sprintf("[%s]", paste(render_blocks, collapse = ","))
@@ -374,7 +382,15 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
           tc_build_ppttc_slide_block(
             favorites_table_as_df(e$tc_table), tc_or(e$template_name, ""),
             tc_or(e$slide_title, ""), tc_or(e$figure_title, ""),
-            chart_id = renderable_ids[[i]]
+            chart_id = renderable_ids[[i]],
+            datasheet_log = tc_build_datasheet_log(
+              dashboard_title = tc_or(e$dashboard_title, ""),
+              tab_label       = tc_or(e$tab_label, ""),
+              subtab_label    = tc_or(e$subtab_label, ""),
+              chart_type      = e$chart_type,
+              selections      = e$selections,
+              chart_id        = renderable_ids[[i]]
+            )
           )
         }, character(1))
         portable_json <- sprintf("[%s]", paste(portable_blocks, collapse = ","))

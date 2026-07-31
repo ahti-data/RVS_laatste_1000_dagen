@@ -324,6 +324,27 @@ test_that("the fallback deck .ppttc references co-located templates, not the abs
   })
 })
 
+test_that("each favorite in a deck download gets its own datasheet log in the corner cell", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+  z <- tempfile(fileext = ".zip")
+  entry <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+    selections = list(view = "quarterly"),
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  favorites_build_deck_zip(z, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  ppttc <- paste(readLines(file.path(extract_dir, "favorites_deck.ppttc")), collapse = "\n")
+
+  expect_true(grepl('"string":"LOG \\| dashboard=D; tab=T; sub-tab=Revenue', ppttc))
+  expect_true(grepl("view=quarterly", ppttc, fixed = TRUE))
+  })
+})
+
 test_that("downloading a favorites deck auto-logs each renderable favorite to Export History", {
   skip_if_not(have_templates, "templates directory not available")
   with_history_dir({
