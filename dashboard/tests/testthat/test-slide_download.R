@@ -68,47 +68,34 @@ test_that("empty titles are omitted but the chart is always present", {
   expect_true(grepl("Chart1", json))
 })
 
-test_that("a chart_id, when supplied, is embedded as a ChartID data block", {
+test_that("a chart_id, when supplied, is embedded as a DownloadID data block", {
   json <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig", chart_id = "exp_abc123")
-  expect_true(grepl('"ChartID"', json))
+  expect_true(grepl('"DownloadID"', json))
   expect_true(grepl('"string":"exp_abc123"', json, fixed = TRUE))
 })
 
-test_that("no ChartID block is added when chart_id is omitted or empty", {
+test_that("no DownloadID block is added when chart_id is omitted or empty", {
   json1 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig")
   json2 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig", chart_id = "")
-  expect_false(grepl("ChartID", json1))
-  expect_false(grepl("ChartID", json2))
+  expect_false(grepl("DownloadID", json1))
+  expect_false(grepl("DownloadID", json2))
 })
 
-test_that("log records dashboard/tab/subtab and joins multi-value options", {
-  log <- tc_build_log(
-    "Laatste 1000 dagen", "Iteratie 1", "Zorg Totaal",
-    list(tot_pop = "all", tot_variables = c("a", "b")),
-    "grouped_bar", "template_v_bar_group.pptx", rendered = TRUE
-  )
-  expect_true(grepl("Dashboard:      Laatste 1000 dagen", log))
-  expect_true(grepl("Sub-tab:        Zorg Totaal", log))
-  expect_true(grepl("tot_variables: a, b", log))
+test_that("a favorite_download_id, when supplied, is embedded as its own data block", {
+  json <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig",
+                               favorite_download_id = "favdl_abc123")
+  expect_true(grepl('"FavoriteDownloadID"', json))
+  expect_true(grepl('"string":"favdl_abc123"', json, fixed = TRUE))
 })
 
-test_that("log includes a Chart ID line, first, when supplied", {
-  log <- tc_build_log(
-    "D", "T", "S", list(), "line", "template_line.pptx",
-    rendered = TRUE, chart_id = "exp_xyz789"
-  )
-  expect_true(grepl("Chart ID:       exp_xyz789", log))
-  # printed before the rest of the header, so it's the first thing a PM sees
-  expect_true(which(grepl("Chart ID:", strsplit(log, "\n")[[1]])) <
-                which(grepl("Dashboard:", strsplit(log, "\n")[[1]])))
+test_that("no FavoriteDownloadID block is added when it is omitted or empty", {
+  json1 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig")
+  json2 <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig", favorite_download_id = "")
+  expect_false(grepl("FavoriteDownloadID", json1))
+  expect_false(grepl("FavoriteDownloadID", json2))
 })
 
-test_that("no Chart ID line when chart_id is omitted", {
-  log <- tc_build_log("D", "T", "S", list(), "line", "template_line.pptx", rendered = TRUE)
-  expect_false(grepl("Chart ID:", log))
-})
-
-test_that("datasheet log is one delimited line built from the same fields as log.txt", {
+test_that("datasheet log is one delimited line -- the only provenance record an export carries", {
   line <- tc_build_datasheet_log(
     "Laatste 1000 dagen", "Iteratie 1", "Zorg Totaal", "grouped_bar",
     list(tot_pop = "all", tot_variables = c("a", "b"))
@@ -122,11 +109,18 @@ test_that("datasheet log is one delimited line built from the same fields as log
   expect_true(grepl("tot_variables=a, b", line, fixed = TRUE))
 })
 
-test_that("datasheet log includes chart_id only when supplied", {
+test_that("datasheet log includes download_id only when chart_id is supplied", {
   with_id    <- tc_build_datasheet_log("D", "T", "S", "line", list(), chart_id = "exp_xyz789")
   without_id <- tc_build_datasheet_log("D", "T", "S", "line", list())
-  expect_true(grepl("chart_id=exp_xyz789", with_id, fixed = TRUE))
-  expect_false(grepl("chart_id=", without_id, fixed = TRUE))
+  expect_true(grepl("download_id=exp_xyz789", with_id, fixed = TRUE))
+  expect_false(grepl("download_id=", without_id, fixed = TRUE))
+})
+
+test_that("datasheet log includes favorite_download_id only when supplied", {
+  with_fdl    <- tc_build_datasheet_log("D", "T", "S", "line", list(), favorite_download_id = "favdl_abc")
+  without_fdl <- tc_build_datasheet_log("D", "T", "S", "line", list())
+  expect_true(grepl("favorite_download_id=favdl_abc", with_fdl, fixed = TRUE))
+  expect_false(grepl("favorite_download_id=", without_fdl, fixed = TRUE))
 })
 
 test_that("datasheet log always stamps a generation timestamp", {
@@ -171,7 +165,7 @@ test_that("no-template chart still yields a ZIP with table + explanation", {
   expect_false(res$rendered)
   expect_true("NO_TEMPLATE.txt" %in% files)
   expect_true("bfly_table.xlsx" %in% files)
-  expect_true("log.txt" %in% files)
+  expect_false("log.txt" %in% files)
   expect_false(any(grepl("slide", files)))
 })
 
@@ -189,10 +183,10 @@ test_that("supported chart without think-cell ships template + ppttc fallback", 
   expect_true("chart_data.ppttc" %in% files)
   expect_true(any(grepl("README", files)))
   expect_true("iter1_tijd_table.xlsx" %in% files)
-  expect_true("log.txt" %in% files)
+  expect_false("log.txt" %in% files)
 })
 
-test_that("a chart_id passed to tc_build_slide_zip lands in both log.txt and the shipped .ppttc", {
+test_that("a chart_id passed to tc_build_slide_zip lands in the shipped .ppttc as a DownloadID block", {
   skip_if_not(have_templates, "templates directory not available")
   z <- tempfile(fileext = ".zip")
   tc_build_slide_zip(
@@ -203,12 +197,26 @@ test_that("a chart_id passed to tc_build_slide_zip lands in both log.txt and the
   extract_dir <- tempfile("extract_")
   utils::unzip(z, exdir = extract_dir)
 
-  log_txt <- paste(readLines(file.path(extract_dir, "log.txt")), collapse = "\n")
-  expect_true(grepl("Chart ID:       exp_history42", log_txt))
+  ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
+  expect_true(grepl('"DownloadID"', ppttc))
+  expect_true(grepl('"string":"exp_history42"', ppttc, fixed = TRUE))
+})
+
+test_that("a favorite_download_id passed to tc_build_slide_zip lands in the shipped .ppttc too", {
+  skip_if_not(have_templates, "templates directory not available")
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "line",
+    filename_prefix = "iter1_tijd", templates_dir = templates_dir,
+    ppttc_exe = NA, write_table_fun = stub_writer,
+    chart_id = "exp_history42", favorite_download_id = "favdl_abc123"
+  )
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
 
   ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
-  expect_true(grepl('"ChartID"', ppttc))
-  expect_true(grepl('"string":"exp_history42"', ppttc, fixed = TRUE))
+  expect_true(grepl('"FavoriteDownloadID"', ppttc))
+  expect_true(grepl('"string":"favdl_abc123"', ppttc, fixed = TRUE))
 })
 
 test_that("tc_build_slide_zip embeds the selection log in the shipped .ppttc's datasheet corner cell", {
@@ -228,10 +236,10 @@ test_that("tc_build_slide_zip embeds the selection log in the shipped .ppttc's d
   # Corner cell (table[0][0]) carries the log, not null; the figure's actual
   # categories/values are unaffected -- confirmed via the existing chart_id
   # coverage above still passing, plus the presence of the sample data below.
-  expect_true(grepl('"table":\\[\\[\\{"string":"LOG \\| dashboard=Laatste 1000 dagen', ppttc))
+  expect_true(grepl('"table":\\[\\[\\{"string":"LOG \\| ', ppttc))
   expect_true(grepl("tab=Iteratie 1", ppttc, fixed = TRUE))
   expect_true(grepl("sub-tab=Zorg Totaal", ppttc, fixed = TRUE))
-  expect_true(grepl("chart_id=exp_history42", ppttc, fixed = TRUE))
+  expect_true(grepl("download_id=exp_history42", ppttc, fixed = TRUE))
   expect_true(grepl('\\{"number":42\\}', ppttc))
 })
 

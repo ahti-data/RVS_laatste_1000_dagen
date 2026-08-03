@@ -106,6 +106,34 @@ test_that("removing a favorite with no PNG snapshot doesn't error", {
   })
 })
 
+test_that("favorites_remove_all empties the list and deletes every PNG snapshot", {
+  with_favorites_path({
+    id1 <- favorites_add(list(label = "One"))
+    favorites_add(list(label = "Two"))
+    dir.create(favorites_assets_dir(), recursive = TRUE, showWarnings = FALSE)
+    writeBin(as.raw(1:4), favorite_asset_path(id1))
+
+    favorites_remove_all()
+
+    expect_equal(favorites_list(), list())
+    expect_false(file.exists(favorite_asset_path(id1)))
+  })
+})
+
+test_that("favorites_remove_ids removes only the given ids, leaving the rest untouched", {
+  with_favorites_path({
+    id1 <- favorites_add(list(label = "One"))
+    id2 <- favorites_add(list(label = "Two"))
+    id3 <- favorites_add(list(label = "Three"))
+
+    favorites_remove_ids(c(id1, id3))
+
+    remaining <- favorites_list()
+    expect_length(remaining, 1)
+    expect_equal(remaining[[1]]$id, id2)
+  })
+})
+
 test_that("favorites persist across a fresh read (simulating an app restart)", {
   with_favorites_path({
     favorites_add(list(label = "Survives restart"))
@@ -138,6 +166,35 @@ test_that("favorites_capture has no slide block when no template matches", {
   )
   expect_true(is.na(entry$template_name))
   expect_null(entry$slide_block)
+})
+
+test_that("favorites_capture labels a favorite with the chart's own title, not the sub-tab, when one is supplied", {
+  entry <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    figure_title = "Revenue by Product", subtab_label = "Revenue",
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  expect_equal(entry$label, "Revenue by Product")
+})
+
+test_that("favorites_capture falls back to the sub-tab label when the chart has no title", {
+  entry <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    subtab_label = "Revenue",
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  expect_equal(entry$label, "Revenue")
+})
+
+test_that("favorites_capture stores module_id when supplied", {
+  entry <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    module_id = "revenue_chart_dl", filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  expect_equal(entry$module_id, "revenue_chart_dl")
 })
 
 test_that("favorites_selections_inline renders a compact, truncated one-liner", {
@@ -201,7 +258,7 @@ test_that("deck ZIP with no favorites still produces a valid, explanatory ZIP", 
   expect_true("README.txt" %in% files)
 })
 
-test_that("deck ZIP combines table + log for favorites without a template", {
+test_that("deck ZIP includes the table even for favorites without a template", {
   z <- tempfile(fileext = ".zip")
   entries <- list(
     # No raw_table field -- mimics a favorite saved before that field existed.
@@ -213,7 +270,7 @@ test_that("deck ZIP combines table + log for favorites without a template", {
   favorites_build_deck_zip(z, entries = entries)
   files <- utils::unzip(z, list = TRUE)$Name
   expect_true("favorites_thinkcell_tables.xlsx" %in% files)
-  expect_true("log.txt" %in% files)
+  expect_false("log.txt" %in% files)
   expect_true("NO_TEMPLATE.txt" %in% files)
   expect_false(any(grepl("deck", files)))
   # No raw_table on this entry -> the raw workbook is skipped, not an error.
@@ -290,7 +347,7 @@ test_that("deck ZIP falls back to template + combined .ppttc when no renderer is
   expect_true("favorites_deck.ppttc" %in% files)
   expect_true(any(grepl("README_render_deck", files)))
   expect_true("favorites_thinkcell_tables.xlsx" %in% files)
-  expect_true("log.txt" %in% files)
+  expect_false("log.txt" %in% files)
   })
 })
 
@@ -340,8 +397,43 @@ test_that("each favorite in a deck download gets its own datasheet log in the co
   utils::unzip(z, exdir = extract_dir)
   ppttc <- paste(readLines(file.path(extract_dir, "favorites_deck.ppttc")), collapse = "\n")
 
-  expect_true(grepl('"string":"LOG \\| dashboard=D; tab=T; sub-tab=Revenue', ppttc))
+  expect_true(grepl('"string":"LOG \\| ', ppttc))
+  expect_true(grepl("dashboard=D; tab=T; sub-tab=Revenue", ppttc, fixed = TRUE))
   expect_true(grepl("view=quarterly", ppttc, fixed = TRUE))
+  })
+})
+
+test_that("every favorite in one 'Download all favorites' click shares a single favorite_download_id", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+  z <- tempfile(fileext = ".zip")
+  entry1 <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  entry2 <- favorites_capture(
+    data = sample_df(), chart_type = "stacked_bar",
+    category_col = "quarter", series_col = "product", value_col = "revenue",
+    agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Cost",
+    filename_prefix = "cost_chart", templates_dir = templates_dir
+  )
+  favorites_build_deck_zip(z, entries = list(entry1, entry2), ppttc_exe = NA, templates_dir = templates_dir)
+
+  history <- export_history_list()
+  expect_length(history, 2)
+  fdl_ids <- unique(vapply(history, function(e) tc_or(e$favorite_download_id, ""), character(1)))
+  expect_length(fdl_ids, 1)
+  expect_true(nzchar(fdl_ids))
+  expect_true(startsWith(fdl_ids, "favdl_"))
+  # ...and every download_id among them is distinct.
+  expect_length(unique(vapply(history, function(e) e$id, character(1))), 2)
+
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  ppttc <- paste(readLines(file.path(extract_dir, "favorites_deck.ppttc")), collapse = "\n")
+  expect_equal(lengths(regmatches(ppttc, gregexpr("FavoriteDownloadID", ppttc)))[[1]], 2)
   })
 })
 
@@ -367,10 +459,8 @@ test_that("downloading a favorites deck auto-logs each renderable favorite to Ex
 
     extract_dir <- tempfile("extract_")
     utils::unzip(z, exdir = extract_dir)
-    log_txt <- paste(readLines(file.path(extract_dir, "log.txt")), collapse = "\n")
-    expect_true(grepl(paste0("Chart ID:       ", history[[1]]$id), log_txt, fixed = TRUE))
-
     ppttc <- paste(readLines(file.path(extract_dir, "favorites_deck.ppttc")), collapse = "\n")
+    expect_true(grepl(paste0("download_id=", history[[1]]$id), ppttc, fixed = TRUE))
     expect_true(grepl(sprintf('"string":"%s"', history[[1]]$id), ppttc, fixed = TRUE))
   })
 })
@@ -410,10 +500,9 @@ test_that("a favorite with no matching template is not logged to Export History"
     favorites_build_deck_zip(z, entries = list(entry))
     expect_equal(export_history_list(), list())
 
-    extract_dir <- tempfile("extract_")
-    utils::unzip(z, exdir = extract_dir)
-    log_txt <- paste(readLines(file.path(extract_dir, "log.txt")), collapse = "\n")
-    expect_false(grepl("Chart ID:", log_txt, fixed = TRUE))
+    files <- utils::unzip(z, list = TRUE)$Name
+    expect_true("NO_TEMPLATE.txt" %in% files)
+    expect_false(any(grepl("deck", files)))
   })
 })
 

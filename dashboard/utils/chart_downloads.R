@@ -392,24 +392,63 @@ chart_data_downloads_server <- function(
     }
 
     if (register_slide) {
-      output$slide <- shiny::downloadHandler(
-        filename = function() {
-          paste0(filename_prefix, "_slide_", Sys.Date(), ".zip")
-        },
-        content = function(file) {
-          resolved_chart_type <- resolve_tc_chart_type(chart_type)
+      # Derives this chart's current exportable state from *live* reactive
+      # data (implicitly isolated -- downloadHandler/registry calls run
+      # outside a reactive context) -- everything build_export_now() needs
+      # to write a ZIP, and everything a bulk regenerate
+      # (utils/export_history.R) needs to fold this chart into a combined
+      # deck without writing a standalone ZIP for it first.
+      build_export_spec <- function() {
+        resolved_chart_type <- resolve_tc_chart_type(chart_type)
 
-          # Underlying table only makes sense for think-cell-supported types.
-          if (!is_tc_chart_type_supported(resolved_chart_type)) {
-            shiny::showNotification(
-              paste0("No think-cell export is available for this chart (type: ",
-                     resolved_chart_type, ")."),
-              type = "warning"
-            )
-          }
+        # Underlying table only makes sense for think-cell-supported types.
+        if (!is_tc_chart_type_supported(resolved_chart_type)) {
+          shiny::showNotification(
+            paste0("No think-cell export is available for this chart (type: ",
+                   resolved_chart_type, ")."),
+            type = "warning"
+          )
+        }
 
-          tc_data <- tryCatch(
-            format_tc_data(
+        tc_data <- tryCatch(
+          format_tc_data(
+            df = data(),
+            chart_type = resolved_chart_type,
+            category_col = category_col,
+            series_col = series_col,
+            value_col = value_col,
+            agg_fun = agg_fun,
+            category_order = category_order,
+            series_order = series_order,
+            waterfall_end_col = waterfall_end_col,
+            waterfall_subtotal_cols = waterfall_subtotal_cols,
+            facet_col = facet_col
+          ),
+          error = function(e) NULL
+        )
+
+        if (is.null(tc_data)) {
+          # Fall back to the raw data so the ZIP is still useful.
+          tc_data <- data()
+        }
+
+        if (!tc_template_available(resolved_chart_type)) {
+          shiny::showNotification(
+            paste0("No suitable think-cell template for the displayed chart ",
+                   "(type: ", resolved_chart_type, "). ",
+                   "The ZIP contains the data table and an explanation, but no slide."),
+            type = "warning", duration = 8
+          )
+        }
+
+        # Determine the template that matches the *displayed* figure from the
+        # actual data (e.g. a grouped/stacked bar with one series -> plain bar),
+        # and build the slide matrix in the templates' expected orientation.
+        slide_type   <- resolved_chart_type
+        slide_matrix <- NULL
+        if (is.null(facet_col)) {
+          prep <- tryCatch(
+            tc_prepare_slide(
               df = data(),
               chart_type = resolved_chart_type,
               category_col = category_col,
@@ -417,110 +456,109 @@ chart_data_downloads_server <- function(
               value_col = value_col,
               agg_fun = agg_fun,
               category_order = category_order,
-              series_order = series_order,
-              waterfall_end_col = waterfall_end_col,
-              waterfall_subtotal_cols = waterfall_subtotal_cols,
-              facet_col = facet_col
+              series_order = series_order
             ),
             error = function(e) NULL
           )
-
-          if (is.null(tc_data)) {
-            # Fall back to the raw data so the ZIP is still useful.
-            tc_data <- data()
+          if (!is.null(prep)) {
+            slide_type   <- prep$chart_type
+            slide_matrix <- prep$matrix
           }
+        }
 
-          if (!tc_template_available(resolved_chart_type)) {
-            shiny::showNotification(
-              paste0("No suitable think-cell template for the displayed chart ",
-                     "(type: ", resolved_chart_type, "). ",
-                     "The ZIP contains the data table and an explanation, but no slide."),
-              type = "warning", duration = 8
-            )
-          }
+        list(
+          tc_data = tc_data,
+          chart_type = slide_type,
+          slide_matrix = slide_matrix,
+          is_faceted = !is.null(facet_col) || is_tc_workbook_list(tc_data),
+          slide_title = resolve_opt(slide_title),
+          figure_title = resolve_opt(figure_title),
+          template_override = slide_effective_override(),
+          slide_order = tc_or(input$slide_order, "auto"),
+          dashboard_title = tc_ctx_dashboard_title(),
+          tab_label = tc_ctx_active_tab(),
+          subtab_label = tc_ctx_active_subtab(),
+          selections = tc_ctx_selections(module_id = id),
+          source_output = resolve_opt(source_output),
+          source_sheet = resolve_opt(source_sheet),
+          filename_prefix = filename_prefix
+        )
+      }
 
-          # Determine the template that matches the *displayed* figure from the
-          # actual data (e.g. a grouped/stacked bar with one series -> plain bar),
-          # and build the slide matrix in the templates' expected orientation.
-          slide_type   <- resolved_chart_type
-          slide_matrix <- NULL
-          if (is.null(facet_col)) {
-            prep <- tryCatch(
-              tc_prepare_slide(
-                df = data(),
-                chart_type = resolved_chart_type,
-                category_col = category_col,
-                series_col = series_col,
-                value_col = value_col,
-                agg_fun = agg_fun,
-                category_order = category_order,
-                series_order = series_order
-              ),
-              error = function(e) NULL
-            )
-            if (!is.null(prep)) {
-              slide_type   <- prep$chart_type
-              slide_matrix <- prep$matrix
-            }
-          }
+      # Builds this chart's slide ZIP from a freshly-derived spec and logs it
+      # to Export History. Used by the "Download slide" button below.
+      build_export_now <- function(zip_path, favorite_download_id = NULL) {
+        spec <- build_export_spec()
 
-          resolved_slide_title  <- resolve_opt(slide_title)
-          resolved_figure_title <- resolve_opt(figure_title)
-          resolved_template_ovr <- slide_effective_override()
-          resolved_slide_order  <- tc_or(input$slide_order, "auto")
-          resolved_dashboard    <- tc_ctx_dashboard_title()
-          resolved_tab          <- tc_ctx_active_tab()
-          resolved_subtab       <- tc_ctx_active_subtab()
-          resolved_selections   <- tc_ctx_selections(module_id = id)
-          resolved_source_output <- resolve_opt(source_output)
-          resolved_source_sheet  <- resolve_opt(source_sheet)
-
-          # Auto-log this export to the shared Export history tab (see
-          # utils/export_history.R), using exactly these already-resolved
-          # values -- not a second, independent re-derivation -- so the
-          # history snapshot always matches what's actually downloaded below.
-          # Skipped for faceted charts (tc_data is a per-facet list there),
-          # same scope limitation favorites_capture() has today.
-          chart_id <- NULL
-          if (is.null(facet_col) && !is_tc_workbook_list(tc_data)) {
-            history_entry <- tc_history_capture(
-              tc_data           = tc_data,
-              chart_type        = slide_type,
-              slide_matrix      = slide_matrix,
-              slide_title       = resolved_slide_title,
-              figure_title      = resolved_figure_title,
-              template_override = resolved_template_ovr,
-              slide_order       = resolved_slide_order,
-              dashboard_title   = resolved_dashboard,
-              tab_label         = resolved_tab,
-              subtab_label      = resolved_subtab,
-              selections        = resolved_selections,
-              source_output     = resolved_source_output,
-              source_sheet      = resolved_source_sheet,
-              filename_prefix   = filename_prefix
-            )
-            history_entry$id <- export_history_new_id()
-            chart_id <- export_history_add(history_entry)
-          }
-
-          tc_build_slide_zip(
-            zip_path          = file,
-            tc_data           = tc_data,
-            chart_type        = slide_type,
-            slide_matrix      = slide_matrix,
-            slide_title       = resolved_slide_title,
-            figure_title      = resolved_figure_title,
-            dashboard_title   = resolved_dashboard,
-            tab_label         = resolved_tab,
-            subtab_label      = resolved_subtab,
-            selections        = resolved_selections,
-            source_output     = resolved_source_output,
-            source_sheet      = resolved_source_sheet,
-            filename_prefix   = filename_prefix,
-            template_override = resolved_template_ovr,
-            slide_order       = resolved_slide_order,
-            chart_id          = chart_id
+        # Auto-log this export to the shared Export history tab (see
+        # utils/export_history.R), using exactly this already-resolved spec
+        # -- not a second, independent re-derivation -- so the history
+        # snapshot always matches what's actually downloaded below. Skipped
+        # for faceted charts (tc_data is a per-facet list there), same scope
+        # limitation favorites_capture() has today.
+        chart_id <- NULL
+        if (!spec$is_faceted) {
+          history_entry <- tc_history_capture(
+            tc_data           = spec$tc_data,
+            chart_type        = spec$chart_type,
+            slide_matrix      = spec$slide_matrix,
+            slide_title       = spec$slide_title,
+            figure_title      = spec$figure_title,
+            template_override = spec$template_override,
+            slide_order       = spec$slide_order,
+            dashboard_title   = spec$dashboard_title,
+            tab_label         = spec$tab_label,
+            subtab_label      = spec$subtab_label,
+            selections        = spec$selections,
+            source_output     = spec$source_output,
+            source_sheet      = spec$source_sheet,
+            favorite_download_id = favorite_download_id,
+            module_id         = id,
+            filename_prefix   = spec$filename_prefix
           )
+          history_entry$id <- export_history_new_id()
+          chart_id <- export_history_add(history_entry)
+        }
+
+        tc_build_slide_zip(
+          zip_path          = zip_path,
+          tc_data           = spec$tc_data,
+          chart_type        = spec$chart_type,
+          slide_matrix      = spec$slide_matrix,
+          slide_title       = spec$slide_title,
+          figure_title      = spec$figure_title,
+          dashboard_title   = spec$dashboard_title,
+          tab_label         = spec$tab_label,
+          subtab_label      = spec$subtab_label,
+          selections        = spec$selections,
+          source_output     = spec$source_output,
+          source_sheet      = spec$source_sheet,
+          filename_prefix   = spec$filename_prefix,
+          template_override = spec$template_override,
+          slide_order       = spec$slide_order,
+          chart_id          = chart_id,
+          favorite_download_id = favorite_download_id
+        )
+        invisible(chart_id)
+      }
+
+      # Registered into this session's chart registry (utils/slide_download.R)
+      # so Export History's "regenerate" can rebuild this chart later against
+      # whatever the dashboard's data looks like *then* -- either as a
+      # standalone ZIP (build_zip, solo regenerate) or folded into a combined
+      # deck alongside other charts (get_spec, bulk regenerate) -- rather
+      # than only ever replaying today's snapshot.
+      tc_chart_registry_register(session, id, list(
+        build_zip = build_export_now,
+        get_spec  = build_export_spec
+      ))
+
+      output$slide <- shiny::downloadHandler(
+        filename = function() {
+          paste0(filename_prefix, "_slide_", Sys.Date(), ".zip")
+        },
+        content = function(file) {
+          build_export_now(file)
         }
       )
 
@@ -547,6 +585,7 @@ chart_data_downloads_server <- function(
           selections        = tc_ctx_selections(module_id = id),
           source_output     = resolve_opt(source_output),
           source_sheet      = resolve_opt(source_sheet),
+          module_id         = id,
           filename_prefix   = filename_prefix
         )
         fav_id <- favorites_add(entry)

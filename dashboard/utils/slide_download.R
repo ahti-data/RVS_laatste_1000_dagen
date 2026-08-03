@@ -4,12 +4,13 @@
 # Turns the exact data that already backs the dashboard's think-cell TABLE
 # download into a downloadable ZIP containing:
 #
-#   1. log.txt              - dashboard / tab / sub-tab name + all option
-#                             selections that define the displayed figure.
-#   2. <prefix>_table.xlsx  - the same think-cell matrix as the table download
+#   1. <prefix>_table.xlsx  - the same think-cell matrix as the table download
 #                             (so the underlying data always matches the slide).
-#   3. slide.pptx           - a think-cell slide rendered from the template that
-#                             matches the displayed chart type.
+#   2. slide.pptx           - a think-cell slide rendered from the template that
+#                             matches the displayed chart type. Its own datasheet
+#                             corner cell carries the provenance log (dashboard /
+#                             tab / sub-tab / selections / download id) -- see
+#                             tc_build_datasheet_log() -- there is no log.txt.
 #
 # If think-cell (ppttc.exe) is not installed on the host, the ZIP instead
 # ships the (valid, non-corrupt) template plus the ready-to-render `.ppttc`
@@ -24,6 +25,44 @@
 # Internal null-coalescing helper. Kept local (tc_or) so this file does not
 # depend on, nor collide with, the app-level `%||%`.
 tc_or <- function(x, y) if (is.null(x) || length(x) == 0) y else x
+
+# ---------------------------------------------------------------------------
+# Session-scoped chart registry: lets Export History "regenerate" a chart
+# against *today's* live data, not just replay a frozen snapshot.
+#
+# `chart_data_downloads_server()` (utils/chart_downloads.R) registers a
+# zero-argument-except-zip-path build function per chart id, so a later
+# regenerate (utils/export_history.R) can call it again on demand. Backed by
+# `session$userData`, which Shiny shares across every module in one user
+# session -- so this only ever sees charts mounted in the *current* session;
+# a chart from a different/older session simply isn't in it (the caller
+# falls back to an exact-snapshot rebuild in that case).
+# ---------------------------------------------------------------------------
+tc_chart_registry <- function(session) {
+  if (is.null(session$userData$tc_chart_registry)) {
+    session$userData$tc_chart_registry <- new.env(parent = emptyenv())
+  }
+  session$userData$tc_chart_registry
+}
+
+#' Register a chart's "build this export right now" function.
+#' @param session The Shiny session (module or top-level -- `userData` is shared).
+#' @param id The chart's `chart_data_downloads_server(id = ...)`.
+#' @param build_fn `function(zip_path, favorite_download_id = NULL)` that
+#'   rebuilds this chart's slide ZIP from *current* reactive data.
+tc_chart_registry_register <- function(session, id, build_fn) {
+  assign(id, build_fn, envir = tc_chart_registry(session))
+  invisible(NULL)
+}
+
+#' Look up a registered chart's build function, or `NULL` if this session
+#' never mounted (or no longer has) that chart id.
+tc_chart_registry_get <- function(session, id) {
+  if (is.null(id) || !nzchar(id)) return(NULL)
+  reg <- tc_chart_registry(session)
+  if (!exists(id, envir = reg, inherits = FALSE)) return(NULL)
+  get(id, envir = reg, inherits = FALSE)
+}
 
 # ---------------------------------------------------------------------------
 # App context: registered once by the main server so the download module can
@@ -581,13 +620,17 @@ tc_prepare_slide <- function(df, chart_type, category_col, series_col, value_col
 #' @param template Template path written into the JSON (forward-slashed).
 #' @param slide_title Optional slide title (bound to SlideTitle). Skipped if "".
 #' @param figure_title Optional figure caption (bound to FigureTitle). Skipped if "".
-#' @param chart_id Optional export-history chart id (bound to a `ChartID`
-#'   automation field). Lets a template designer bind a small, discreet text
-#'   box to `ChartID` so a PM can find this exact export again later in the
+#' @param chart_id Optional download id (bound to a `DownloadID` automation
+#'   field). Lets a template designer bind a small, discreet text box to
+#'   `DownloadID` so a PM can find this exact export again later in the
 #'   **Export history** tab (`utils/export_history.R`) straight from a real
 #'   slide, months after the fact -- no export-history-specific work is
 #'   required here beyond adding one more named data block, harmless (ignored
 #'   by think-cell) for any template that hasn't bound the field yet.
+#' @param favorite_download_id Optional id shared by every chart in the same
+#'   "Download all favorites" click (bound to a `FavoriteDownloadID`
+#'   automation field), so a bulk download can be found and regenerated as
+#'   one unit later. `NULL`/empty for a solo "Download slide" click.
 #' @param datasheet_log Optional selection-log string written into the
 #'   *chart's own datasheet*, corner cell (row 1, column 1) -- see
 #'   [tc_build_datasheet_log()]. That cell precedes the category labels, so
@@ -598,7 +641,8 @@ tc_prepare_slide <- function(df, chart_type, category_col, series_col, value_col
 #'   edit it.
 #' @return A single JSON object string (not wrapped in `[...]`).
 tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_title = "",
-                                        chart_id = NULL, datasheet_log = NULL) {
+                                        chart_id = NULL, datasheet_log = NULL,
+                                        favorite_download_id = NULL) {
   df <- as.data.frame(df, stringsAsFactors = FALSE, check.names = FALSE)
   if (ncol(df) < 2) {
     stop("think-cell matrix needs at least a label column and one value column.", call. = FALSE)
@@ -625,8 +669,12 @@ tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_ti
                                 tc_cell_label(figure_title)))
   }
   if (nzchar(trimws(tc_or(chart_id, "")))) {
-    blocks <- c(blocks, sprintf('{"name":"ChartID","table":[[%s]]}',
+    blocks <- c(blocks, sprintf('{"name":"DownloadID","table":[[%s]]}',
                                 tc_cell_label(chart_id)))
+  }
+  if (nzchar(trimws(tc_or(favorite_download_id, "")))) {
+    blocks <- c(blocks, sprintf('{"name":"FavoriteDownloadID","table":[[%s]]}',
+                                tc_cell_label(favorite_download_id)))
   }
 
   data_block <- paste(blocks, collapse = ",")
@@ -638,8 +686,8 @@ tc_build_ppttc_slide_block <- function(df, template, slide_title = "", figure_ti
 #' @inheritParams tc_build_ppttc_slide_block
 #' @return A single JSON string (a one-element array).
 tc_build_ppttc_json <- function(df, template, slide_title = "", figure_title = "",
-                                chart_id = NULL, datasheet_log = NULL) {
-  sprintf("[%s]", tc_build_ppttc_slide_block(df, template, slide_title, figure_title, chart_id, datasheet_log))
+                                chart_id = NULL, datasheet_log = NULL, favorite_download_id = NULL) {
+  sprintf("[%s]", tc_build_ppttc_slide_block(df, template, slide_title, figure_title, chart_id, datasheet_log, favorite_download_id))
 }
 
 # ---------------------------------------------------------------------------
@@ -683,12 +731,13 @@ tc_render_pptx_ppttc <- function(json, out_pptx, exe) {
 }
 
 # ---------------------------------------------------------------------------
-# Log file
+# Datasheet corner-cell log -- the one provenance record every export carries
+# (there is no separate log.txt file: the corner cell/xlsx header is it).
 # ---------------------------------------------------------------------------
-#' Derive `name = value` pairs from a selections list -- the single source of
-#' truth for both [tc_format_selections()] (log.txt) and
-#' [tc_build_datasheet_log()] (the datasheet A1 cell), so the two can never
-#' disagree about which options were selected or how multi-value ones join.
+#' Derive `name = value` pairs from a selections list -- shared by every
+#' place that needs to render a selections snapshot (currently just
+#' [tc_build_datasheet_log()], and [favorites_selections_inline()] in
+#' `utils/favorites.R` for its own, differently-formatted display).
 #' @return A list of `list(name, value)`, or `list()` if there's nothing.
 tc_selection_kv_pairs <- function(selections) {
   if (is.null(selections) || length(selections) == 0) return(list())
@@ -701,26 +750,19 @@ tc_selection_kv_pairs <- function(selections) {
   })
 }
 
-tc_format_selections <- function(selections) {
-  pairs <- tc_selection_kv_pairs(selections)
-  if (length(pairs) == 0) return("  (none captured)")
-  lines <- vapply(pairs, function(p) sprintf("  - %s: %s", p$name, p$value), character(1))
-  paste(lines, collapse = "\n")
-}
-
 #' Build the single-line selection log embedded in the chart datasheet's
 #' corner cell (see [tc_build_ppttc_slide_block()]), and, via
 #' [tc_stamp_tc_matrix_corner()], the corner header of a plain think-cell
-#' `.xlsx` export. Reuses the exact same dashboard/tab/subtab/selection
-#' values as [tc_build_log()] (log.txt) via [tc_selection_kv_pairs()], just
-#' formatted as one delimited line instead of a multi-section text file,
-#' since a datasheet cell is one line/field. Always stamps its own
-#' generation timestamp (like [tc_build_log()]'s "Generated:" line), so a
-#' chart found later in a deck can be dated without cross-referencing
+#' `.xlsx` export. This is the *only* provenance record an export carries --
+#' there is no separate log.txt. Always stamps its own generation timestamp,
+#' so a chart found later in a deck can be dated without cross-referencing
 #' anything else.
-#' @param chart_id Optional export-history chart id, included as its own
-#'   `chart_id=` field when supplied. Omitted for exports that aren't logged
-#'   to Export History (e.g. the plain "Download data (think-cell)" button).
+#' @param chart_id Optional download id, included as its own `download_id=`
+#'   field when supplied. Omitted for exports that aren't logged to Export
+#'   History (e.g. the plain "Download data (think-cell)" button).
+#' @param favorite_download_id Optional id shared by every chart in the same
+#'   "Download all favorites" click, included as its own
+#'   `favorite_download_id=` field when supplied.
 #' @param source_output,source_sheet Optional identifiers naming the
 #'   underlying data source this chart's numbers came from -- e.g. a
 #'   pipeline output id ("3a") and, within it, a sheet name -- for a
@@ -728,13 +770,17 @@ tc_format_selections <- function(selections) {
 #'   as `output=`/`sheet=` fields when supplied; omit both for dashboards
 #'   with no such concept (the default, and this template's own scaffold).
 #' @return A single-line character string, e.g.
-#'   `"LOG | timestamp=...; chart_id=...; output=...; sheet=...; dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
+#'   `"LOG | timestamp=...; download_id=...; output=...; sheet=...; dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
 tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
                                    chart_type, selections, chart_id = NULL,
+                                   favorite_download_id = NULL,
                                    source_output = NULL, source_sheet = NULL) {
   parts <- c(sprintf("timestamp=%s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
   if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
-    parts <- c(parts, sprintf("chart_id=%s", chart_id))
+    parts <- c(parts, sprintf("download_id=%s", chart_id))
+  }
+  if (!is.null(favorite_download_id) && nzchar(trimws(tc_or(favorite_download_id, "")))) {
+    parts <- c(parts, sprintf("favorite_download_id=%s", favorite_download_id))
   }
   if (!is.null(source_output) && nzchar(trimws(tc_or(source_output, "")))) {
     parts <- c(parts, sprintf("output=%s", source_output))
@@ -756,52 +802,6 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
   paste0("LOG | ", paste(parts, collapse = "; "))
 }
 
-#' Assemble the human-readable export log.
-#' @param chart_id Optional export-history chart id, printed as the first
-#'   field so it's the easiest thing to spot and copy into the **Export
-#'   history** tab's search box (see `utils/export_history.R`).
-tc_build_log <- function(dashboard_title, tab_label, subtab_label, selections,
-                         chart_type, template_file, rendered, note = NULL,
-                         order_mode = NULL, chart_id = NULL) {
-  order_label <- switch(
-    tc_or(order_mode, "auto"),
-    auto     = "auto (numeric ascending when applicable, else as displayed)",
-    as_is    = "as displayed",
-    cat_asc  = "category ascending",
-    cat_desc = "category descending",
-    val_asc  = "value ascending",
-    val_desc = "value descending",
-    tc_or(order_mode, "auto")
-  )
-  header <- paste(
-    "think-cell slide export log",
-    "===========================",
-    paste0("Generated:      ", format(Sys.time(), "%Y-%m-%d %H:%M:%S")),
-    paste0("Dashboard:      ", tc_or(dashboard_title, "")),
-    paste0("Tab:            ", tc_or(tab_label, "")),
-    paste0("Sub-tab:        ", tc_or(subtab_label, "")),
-    paste0("Chart type:     ", tc_or(chart_type, "")),
-    paste0("Template:       ", tc_or(template_file, "(none available)")),
-    paste0("Category order: ", order_label),
-    paste0("Slide rendered: ",
-           if (isTRUE(rendered)) "yes (think-cell)"
-           else "no (template + .ppttc data included instead)"),
-    sep = "\n"
-  )
-  if (!is.null(chart_id) && nzchar(chart_id)) {
-    header <- paste(paste0("Chart ID:       ", chart_id), header, sep = "\n")
-  }
-  if (!is.null(note) && nzchar(note)) {
-    header <- paste(header, paste0("Note:           ", note), sep = "\n")
-  }
-  paste0(
-    header, "\n\n",
-    "Selected options\n",
-    "----------------\n",
-    tc_format_selections(selections), "\n"
-  )
-}
-
 # ---------------------------------------------------------------------------
 # Orchestrator: build the download ZIP.
 # ---------------------------------------------------------------------------
@@ -817,10 +817,12 @@ tc_build_log <- function(dashboard_title, tab_label, subtab_label, selections,
 #' @param filename_prefix Prefix for the table file name.
 #' @param templates_dir,template_override,ppttc_exe Optional overrides.
 #' @param write_table_fun Function(data, path) writing the underlying table.
-#' @param chart_id Optional export-history chart id (see
-#'   [tc_build_ppttc_slide_block()] and [tc_build_log()]); passed straight
-#'   through to both, so callers not using `utils/export_history.R` can just
-#'   omit it (default `NULL`, identical to today's behavior).
+#' @param chart_id Optional download id (see [tc_build_ppttc_slide_block()]);
+#'   passed straight through, so callers not using `utils/export_history.R`
+#'   can just omit it (default `NULL`, identical to today's behavior).
+#' @param favorite_download_id Optional id shared by every chart in the same
+#'   "Download all favorites" click (see [tc_build_ppttc_slide_block()] and
+#'   [tc_build_datasheet_log()]) -- `NULL` for a solo "Download slide" click.
 #' @param source_output,source_sheet Optional data-source identifiers (see
 #'   [tc_build_datasheet_log()]) -- passed straight through to the chart
 #'   datasheet's corner-cell log, nowhere else.
@@ -842,6 +844,7 @@ tc_build_slide_zip <- function(zip_path,
                                slide_order      = "auto",
                                write_table_fun  = write_tc_xlsx,
                                chart_id         = NULL,
+                               favorite_download_id = NULL,
                                source_output    = NULL,
                                source_sheet     = NULL) {
 
@@ -880,8 +883,8 @@ tc_build_slide_zip <- function(zip_path,
 
   rendered <- FALSE
 
-  # Same values that feed log.txt below, just formatted as one line for the
-  # chart datasheet's corner cell (see tc_build_ppttc_slide_block()).
+  # The one provenance record this export carries -- see
+  # tc_build_ppttc_slide_block() for where it's written (there is no log.txt).
   datasheet_log <- tc_build_datasheet_log(
     dashboard_title = dashboard_title,
     tab_label       = tab_label,
@@ -889,6 +892,7 @@ tc_build_slide_zip <- function(zip_path,
     chart_type      = chart_type,
     selections      = selections,
     chart_id        = chart_id,
+    favorite_download_id = favorite_download_id,
     source_output   = source_output,
     source_sheet    = source_sheet
   )
@@ -908,7 +912,7 @@ tc_build_slide_zip <- function(zip_path,
   } else {
     # ---- (3) slide ----------------------------------------------------------
     if (!nzchar(trimws(tc_or(slide_title, "")))) slide_title <- tc_or(subtab_label, "")
-    json <- tc_build_ppttc_json(slide_matrix, tc_short_path(template_path), slide_title, figure_title, chart_id, datasheet_log)
+    json <- tc_build_ppttc_json(slide_matrix, tc_short_path(template_path), slide_title, figure_title, chart_id, datasheet_log, favorite_download_id)
     exe  <- tc_or(ppttc_exe, tc_find_ppttc_exe())
 
     if (!is.null(exe) && !is.na(exe) && nzchar(exe)) {
@@ -936,7 +940,7 @@ tc_build_slide_zip <- function(zip_path,
       # their own PC has no such path; think-cell needs "slide_template.pptx"
       # sitting right next to chart_data.ppttc, not a server path it can't reach.
       file.copy(template_path, file.path(work, "slide_template.pptx"), overwrite = TRUE)
-      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title, chart_id, datasheet_log)
+      portable_json <- tc_build_ppttc_json(slide_matrix, "slide_template.pptx", slide_title, figure_title, chart_id, datasheet_log, favorite_download_id)
       writeLines(portable_json, file.path(work, "chart_data.ppttc"), useBytes = TRUE)
       writeLines(paste0(
         "think-cell was not available to render the slide automatically on this machine.\n",
@@ -951,22 +955,9 @@ tc_build_slide_zip <- function(zip_path,
     }
   }
 
-  # ---- (1) log --------------------------------------------------------------
-  log_txt <- tc_build_log(
-    dashboard_title = dashboard_title,
-    tab_label       = tab_label,
-    subtab_label    = subtab_label,
-    selections      = selections,
-    chart_type      = chart_type,
-    template_file   = if (has_template) basename(template_path) else NA_character_,
-    rendered        = rendered,
-    note            = note,
-    order_mode      = slide_order,
-    chart_id        = chart_id
-  )
-  writeLines(log_txt, file.path(work, "log.txt"), useBytes = TRUE)
-
   # ---- zip (flat) -----------------------------------------------------------
+  # No log.txt: the datasheet_log embedded above (and the underlying table)
+  # is this export's one provenance record.
   files <- basename(list.files(work, full.names = TRUE))
   zip_path_abs <- normalizePath(zip_path, winslash = "/", mustWork = FALSE)
   setwd(work)
