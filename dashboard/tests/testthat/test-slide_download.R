@@ -332,6 +332,20 @@ test_that("template listing and override choices work", {
   expect_true("template_v_bar.pptx" %in% unname(ch))
 })
 
+test_that("tc_template_choice_items carries the same choices, each with a preview field", {
+  skip_if_not(have_templates, "templates directory not available")
+  items <- tc_template_choice_items(templates_dir)
+  expect_gt(length(items), 1)
+  expect_equal(items[[1]]$value, "")
+  expect_equal(items[[1]]$label, "Automatisch (gedetecteerd)")
+  expect_equal(items[[1]]$preview, "")  # the automatic option never has a preview
+
+  values <- vapply(items, function(x) x$value, character(1))
+  expect_true("template_v_bar.pptx" %in% values)
+  # every item has a (possibly empty) preview field, never NA/missing
+  expect_true(all(vapply(items, function(x) is.character(x$preview) && !is.na(x$preview), logical(1))))
+})
+
 test_that("tc_detect_slide_type agrees with tc_prepare_slide", {
   d <- data.frame(category = "CT", series = c("A", "B"), v = c(1, 2), stringsAsFactors = FALSE)
   expect_equal(tc_detect_slide_type(d, "grouped_bar", "category", "series"), "bar")

@@ -283,13 +283,45 @@ favorites_capture <- function(
   )
 }
 
+#' Build the HTML page bundling every spec's captured chart image, in the
+#' same order as `specs`, so a bulk download's PNGs read as one document
+#' instead of N loose files scattered in the ZIP. Self-contained (images
+#' embedded as base64 data URIs) -- opens directly in any browser, no
+#' server or extra files needed.
+#' @param specs Same shape as [tc_build_deck_from_specs()]; only `label` and
+#'   `asset_path` are used here.
+#' @return The HTML as a single string, or `NA_character_` if no spec has a
+#'   usable `asset_path`.
+tc_build_charts_overview_html <- function(specs) {
+  sections <- vapply(specs, function(s) {
+    asset <- s$asset_path
+    if (is.null(asset) || !nzchar(asset) || !file.exists(asset)) return("")
+    bytes <- tryCatch(readBin(asset, "raw", n = file.info(asset)$size), error = function(e) NULL)
+    if (is.null(bytes) || length(bytes) == 0) return("")
+    uri <- paste0("data:image/png;base64,", jsonlite::base64_enc(bytes))
+    sprintf(
+      '<section style="margin-bottom:32px;"><h2 style="font:600 16px sans-serif; color:#111;">%s</h2><img src="%s" style="max-width:100%%; border:1px solid #ddd; border-radius:4px;"></section>',
+      htmltools::htmlEscape(tc_or(s$label, "chart")), uri
+    )
+  }, character(1))
+  sections <- sections[nzchar(sections)]
+  if (length(sections) == 0) return(NA_character_)
+  paste0(
+    "<!doctype html><html><head><meta charset=\"utf-8\">",
+    "<title>Charts</title></head><body style=\"font-family:sans-serif; max-width:900px; margin:24px auto; padding:0 16px;\">",
+    paste(sections, collapse = "\n"),
+    "</body></html>"
+  )
+}
+
 #' Build one combined ZIP from a list of chart "specs" -- two workbooks (one
 #' sheet per spec each, same sheet names) -- `favorites_thinkcell_tables.xlsx`
 #' (the think-cell-shaped matrix) and `favorites_raw_tables.xlsx` (only for
-#' specs that have one) -- a `chart_<label>.png` for every spec whose
-#' `asset_path` exists, and either a single rendered multi-slide deck (one
-#' `ppttc.exe` call over every spec's slide block concatenated into one
-#' `.ppttc` array) or the same graceful template+`.ppttc`+README fallback
+#' specs that have one) -- a single `charts_overview.html` bundling every
+#' spec's captured chart image in order (see [tc_build_charts_overview_html()];
+#' skipped when no spec has one), and either a single rendered multi-slide
+#' deck (one `ppttc.exe` call over every spec's slide block concatenated into
+#' one `.ppttc` array) or the same graceful template+`.ppttc`+README fallback
 #' [tc_build_slide_zip()] uses when no renderer is available.
 #'
 #' Generic over *where* the specs came from -- [favorites_build_deck_zip()]
@@ -336,14 +368,11 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
       write_tc_xlsx(raw_sheets, file.path(work, "favorites_raw_tables.xlsx"))
     }
 
-    # Named after the same sheet label so it's obvious which workbook sheet a
-    # given image goes with. Kept flat (not in a subfolder) because the zip
-    # helper below lists `work` non-recursively.
-    for (i in seq_along(specs)) {
-      asset <- specs[[i]]$asset_path
-      if (!is.null(asset) && nzchar(asset) && file.exists(asset)) {
-        file.copy(asset, file.path(work, paste0("chart_", labels[[i]], ".png")), overwrite = TRUE)
-      }
+    # One page with every captured chart image in spec order, instead of N
+    # loose chart_<label>.png files -- see tc_build_charts_overview_html().
+    overview_html <- tc_build_charts_overview_html(specs)
+    if (!is.na(overview_html)) {
+      writeLines(overview_html, file.path(work, "charts_overview.html"), useBytes = TRUE)
     }
 
     renderable_idx <- which(vapply(specs, function(s) !is.na(tc_or(s$template_path, NA_character_)), logical(1)))

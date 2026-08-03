@@ -305,11 +305,38 @@ test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one"
   })
 })
 
-test_that("deck ZIP includes a chart_<label>.png for favorites with a captured snapshot", {
+test_that("tc_build_charts_overview_html returns NA when no spec has a usable asset_path", {
+  specs <- list(
+    list(label = "A", asset_path = NULL),
+    list(label = "B", asset_path = "/does/not/exist.png")
+  )
+  expect_true(is.na(tc_build_charts_overview_html(specs)))
+})
+
+test_that("tc_build_charts_overview_html embeds every image, in spec order, as a data URI", {
+  png1 <- tempfile(fileext = ".png")
+  png2 <- tempfile(fileext = ".png")
+  writeBin(as.raw(1:4), png1)
+  writeBin(as.raw(5:8), png2)
+  on.exit(unlink(c(png1, png2)))
+
+  specs <- list(
+    list(label = "First Chart", asset_path = png1),
+    list(label = "Second Chart", asset_path = png2)
+  )
+  html <- tc_build_charts_overview_html(specs)
+  expect_false(is.na(html))
+  expect_true(grepl("<!doctype html>", html, fixed = TRUE))
+  expect_true(grepl("data:image/png;base64,", html, fixed = TRUE))
+  # "First Chart" must appear before "Second Chart" -- same order as specs.
+  expect_lt(regexpr("First Chart", html, fixed = TRUE), regexpr("Second Chart", html, fixed = TRUE))
+})
+
+test_that("deck ZIP includes one charts_overview.html bundling every captured snapshot in order", {
   with_favorites_path({
     dir.create(favorites_assets_dir(), recursive = TRUE, showWarnings = FALSE)
-    # A fake PNG (content doesn't matter for this test -- just that it's
-    # copied into the zip under the right name).
+    # Fake PNGs (content doesn't matter -- just that they're embedded, in
+    # entry order, in one page instead of copied as loose files).
     writeBin(as.raw(c(0x89, 0x50, 0x4E, 0x47)), favorite_asset_path("with_snap"))
 
     entries <- list(
@@ -327,8 +354,15 @@ test_that("deck ZIP includes a chart_<label>.png for favorites with a captured s
     favorites_build_deck_zip(z, entries = entries)
     files <- utils::unzip(z, list = TRUE)$Name
 
-    expect_true("chart_Has Snapshot.png" %in% files)
-    expect_false("chart_No Snapshot.png" %in% files)
+    expect_true("charts_overview.html" %in% files)
+    expect_false(any(grepl("^chart_.*\\.png$", files)))
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    html <- paste(readLines(file.path(extract_dir, "charts_overview.html")), collapse = "\n")
+    expect_true(grepl("Has Snapshot", html, fixed = TRUE))
+    expect_false(grepl("No Snapshot", html, fixed = TRUE))
+    expect_true(grepl("data:image/png;base64,", html, fixed = TRUE))
   })
 })
 

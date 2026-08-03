@@ -65,6 +65,56 @@ if (!window.__tcFavoriteCaptureInit) {
 }
 "
 
+#' Client-side handler that swaps a `selectizeInput`'s full option list --
+#' each carrying its own `value`/`label`/`preview` (a data-URI or `""`) --
+#' used both for the initial render (via `options$options`, see
+#' [tc_template_choice_items()]) and to refresh it later when the template
+#' list changes (a new upload on the Manage Templates tab), since
+#' `updateSelectizeInput()` only ever accepts plain label/value pairs, not
+#' the extra `preview` field a thumbnail-per-option picker needs. Idempotent
+#' registration, same pattern as [TC_FAVORITE_CAPTURE_JS].
+TC_TEMPLATE_PICKER_JS <- r"(
+if (!window.__tcTemplatePickerInit) {
+  window.__tcTemplatePickerInit = true;
+  $(document).on('shiny:connected', function() {
+    Shiny.addCustomMessageHandler('tc_template_picker_refresh', function(msg) {
+      var el = document.getElementById(msg.input_id);
+      if (!el || !el.selectize) return;
+      var sel = el.selectize;
+      var current = sel.getValue();
+      sel.clearOptions();
+      (msg.items || []).forEach(function(it) { sel.addOption(it); });
+      sel.refreshOptions(false);
+      var next = (typeof msg.selected !== 'undefined' && msg.selected !== null) ? msg.selected : current;
+      sel.setValue(next, true);
+    });
+  });
+}
+)"
+
+#' `render` option for the template `selectizeInput`: shows a small
+#' thumbnail (when `item.preview` is set) next to the label, both for each
+#' row in the open dropdown (so a PM can scroll through and see every
+#' template before picking one, instead of choosing blind by name) and for
+#' the currently-selected item once closed (so the choice stays visible
+#' without a separate preview box below the picker).
+TC_TEMPLATE_PICKER_RENDER_JS <- r"(
+{
+  option: function(item, escape) {
+    var img = item.preview
+      ? '<img src="' + item.preview + '" style="width:64px;height:36px;object-fit:contain;margin-right:8px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:4px;background:#fff;">'
+      : '<span style="display:inline-block;width:64px;margin-right:8px;"></span>';
+    return '<div style="display:flex;align-items:center;padding:4px 6px;">' + img + '<span>' + escape(item.label) + '</span></div>';
+  },
+  item: function(item, escape) {
+    var img = item.preview
+      ? '<img src="' + item.preview + '" style="width:28px;height:18px;object-fit:contain;margin-right:6px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:3px;background:#fff;">'
+      : '';
+    return '<div style="display:flex;align-items:center;">' + img + '<span>' + escape(item.label) + '</span></div>';
+  }
+}
+)"
+
 #' UI for raw and think-cell chart data downloads.
 #'
 #' The think-cell button is only shown when `chart_type` is supported.
@@ -118,49 +168,67 @@ chart_data_downloads_ui <- function(
     tc_template_available(chart_type)
   }
 
+  slide_extra <- NULL
   if (show_slide) {
     buttons <- c(
       buttons,
-      list(
-        shiny::downloadButton(ns("slide"), slide_label, class = "btn-primary"),
-        shiny::div(
-          class = "tc-slide-template",
-          style = "margin-top:8px;",
-          shiny::selectInput(
-            ns("slide_template_choice"),
-            label = "Slide template",
-            choices = tc_template_choices(),
-            selected = ""
+      list(shiny::downloadButton(ns("slide"), slide_label, class = "btn-primary"))
+    )
+    slide_extra <- shiny::tagList(
+      shiny::div(
+        class = "tc-slide-template",
+        style = "margin-top:8px;",
+        shiny::selectizeInput(
+          ns("slide_template_choice"),
+          label = "Slide template",
+          choices = NULL,
+          selected = "",
+          options = list(
+            options    = tc_template_choice_items(),
+            valueField = "value",
+            labelField = "label",
+            searchField = "label",
+            render     = I(TC_TEMPLATE_PICKER_RENDER_JS)
+          )
+        ),
+        shiny::selectInput(
+          ns("slide_order"),
+          label = "Category order",
+          choices = c(
+            "Automatic (numeric / as displayed)" = "auto",
+            "As displayed"                        = "as_is",
+            "Category ascending"                  = "cat_asc",
+            "Category descending"                 = "cat_desc",
+            "Value ascending"                     = "val_asc",
+            "Value descending"                    = "val_desc"
           ),
-          shiny::selectInput(
-            ns("slide_order"),
-            label = "Category order",
-            choices = c(
-              "Automatic (numeric / as displayed)" = "auto",
-              "As displayed"                        = "as_is",
-              "Category ascending"                  = "cat_asc",
-              "Category descending"                 = "cat_desc",
-              "Value ascending"                     = "val_asc",
-              "Value descending"                    = "val_desc"
-            ),
-            selected = "auto"
-          ),
-          shiny::uiOutput(ns("slide_template_info")),
-          shiny::uiOutput(ns("slide_template_preview")),
-          shiny::tags$div(
-            `data-plot-output-id` = plot_output_id,
-            shiny::actionButton(ns("favorite"), favorite_label,
-                                class = "btn-default tc-favorite-btn",
-                                style = "margin-top:8px;"),
-            shiny::uiOutput(ns("favorite_status"))
-          ),
-          shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS))
-        )
+          selected = "auto"
+        ),
+        shiny::uiOutput(ns("slide_template_info")),
+        shiny::tags$div(
+          `data-plot-output-id` = plot_output_id,
+          shiny::actionButton(ns("favorite"), favorite_label,
+                              class = "btn-default tc-favorite-btn",
+                              style = "margin-top:8px;"),
+          shiny::uiOutput(ns("favorite_status"))
+        ),
+        shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS)),
+        shiny::tags$script(shiny::HTML(TC_TEMPLATE_PICKER_JS))
       )
     )
   }
 
-  do.call(shiny::tagList, buttons)
+  # Everything download/preview-related for this chart lives in one visually
+  # contained panel, rather than a loose sequence of buttons and controls.
+  shiny::tags$div(
+    class = "tc-export-panel",
+    style = paste(
+      "border:1px solid #E4E7EE; border-radius:8px; padding:12px 14px 14px;",
+      "background:#FAFAFA; margin-bottom:10px;"
+    ),
+    do.call(shiny::tagList, buttons),
+    slide_extra
+  )
 }
 
 #' Server logic for raw and think-cell chart data downloads.
@@ -228,13 +296,19 @@ chart_data_downloads_server <- function(
       template_choices_poll <- shiny::reactivePoll(
         5000, session,
         checkFunc = function() {
-          d  <- tc_find_templates_dir()      # built-in templates
-          cd <- tc_custom_templates_dir()    # runtime uploads (state/template_uploads)
-          paste(
-            if (!is.null(d)  && !is.na(d)  && dir.exists(d))  as.character(file.info(d)$mtime)  else "",
-            if (!is.null(cd) && !is.na(cd) && dir.exists(cd)) as.character(file.info(cd)$mtime) else "",
-            sep = "|"
+          # A directory's own mtime only changes when a file is created or
+          # removed directly inside it -- writing into previews/ (a
+          # subdirectory that already exists) doesn't touch templates/'s own
+          # mtime, so it's watched separately too, or a new/replaced preview
+          # (Manage Templates' "Save preview") would never refresh this
+          # picker's embedded thumbnails for an already-open session.
+          dirs <- c(
+            tc_find_templates_dir(), tc_custom_templates_dir(),
+            tc_builtin_previews_dir(), tc_custom_previews_dir()
           )
+          paste(vapply(dirs, function(d) {
+            if (!is.null(d) && !is.na(d) && dir.exists(d)) as.character(file.info(d)$mtime) else ""
+          }, character(1)), collapse = "|")
         },
         valueFunc = function() tc_template_choices()
       )
@@ -242,8 +316,15 @@ chart_data_downloads_server <- function(
         choices  <- template_choices_poll()
         current  <- shiny::isolate(input$slide_template_choice)
         selected <- if (!is.null(current) && current %in% choices) current else ""
-        shiny::updateSelectInput(session, "slide_template_choice",
-                                 choices = choices, selected = selected)
+        # updateSelectInput() only takes label/value pairs -- this picker's
+        # per-option preview thumbnail needs the richer item list, so the
+        # refresh goes through a small custom message handler instead (see
+        # TC_TEMPLATE_PICKER_JS in the UI function above).
+        session$sendCustomMessage("tc_template_picker_refresh", list(
+          input_id = session$ns("slide_template_choice"),
+          items    = tc_template_choice_items(),
+          selected = selected
+        ))
       }, ignoreInit = TRUE)
     }
 
@@ -290,37 +371,6 @@ chart_data_downloads_server <- function(
         style = "font-size:12px; color:#374151;",
         label, shiny::tags$strong(info$name), warn
       )
-    })
-
-    # Inline preview of the effective template (auto-detected or manually
-    # chosen), so a PM can tell templates apart without leaving the chart tab
-    # to check the Manage Templates list. Same tc_preview_data_uri() lookup
-    # that tab uses; a template with no curated/uploaded preview just shows a
-    # placeholder, never an error (see utils/slide_download.R).
-    output$slide_template_preview <- shiny::renderUI({
-      info <- tryCatch(slide_chosen_template(), error = function(e) NULL)
-      if (is.null(info) || is.na(info$name)) return(NULL)
-      uri <- tc_preview_data_uri(info$name)
-      if (!is.na(uri)) {
-        shiny::tags$img(
-          src = uri, alt = paste("Preview van", info$name),
-          style = paste(
-            "display:block; margin-top:6px; width:160px; height:auto;",
-            "max-height:110px; object-fit:contain; background:#fff;",
-            "border:1px solid #E4E7EE; border-radius:4px;"
-          )
-        )
-      } else {
-        shiny::tags$div(
-          style = paste(
-            "display:flex; align-items:center; justify-content:center;",
-            "margin-top:6px; width:160px; height:70px; background:#F7F8FA;",
-            "border:1px dashed #D1D5DB; border-radius:4px; font-size:11px;",
-            "color:#9CA3AF; text-align:center;"
-          ),
-          "No preview"
-        )
-      }
     })
 
     output$raw <- shiny::downloadHandler(

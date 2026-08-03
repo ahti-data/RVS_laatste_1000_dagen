@@ -402,6 +402,23 @@ tc_template_choices <- function(templates_dir = NULL) {
   stats::setNames(values, labels)
 }
 
+#' Same choices as [tc_template_choices()], but each carrying its preview
+#' image (if any) too -- for a `selectizeInput` picker that shows a
+#' thumbnail per option (see `chart_data_downloads_ui()` in
+#' `utils/chart_downloads.R`), rather than plain text a PM has to pick
+#' blind. A template with no curated/uploaded preview just has `preview =
+#' NA` -- the picker falls back to a blank swatch for it, never an error.
+#' @return List of `list(value, label, preview)`.
+tc_template_choice_items <- function(templates_dir = NULL) {
+  choices <- tc_template_choices(templates_dir)
+  labels  <- names(choices)
+  values  <- unname(choices)
+  lapply(seq_along(values), function(i) {
+    preview <- if (nzchar(values[[i]])) tc_preview_data_uri(values[[i]], templates_dir) else NA_character_
+    list(value = values[[i]], label = labels[[i]], preview = if (is.na(preview)) "" else preview)
+  })
+}
+
 # ---------------------------------------------------------------------------
 # Template preview thumbnails (Manage Templates tab).
 #
