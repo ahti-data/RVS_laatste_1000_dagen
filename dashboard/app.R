@@ -945,6 +945,14 @@ iteration2_panels <- function() {
           )
         )
       )
+    ),
+    tabPanel(
+      "Favorites",
+      br(),
+      favorites_panel_ui(
+        "favorites_iter2",
+        intro = "Favorites starred from Iteratie 2's charts. See the main Favorites tab for the combined list across every iteration."
+      )
     )
   )
 }
@@ -2133,6 +2141,14 @@ ui <- navbarPage(
 
           tabPanel("Systeem Logs",
              verbatimTextOutput("app_log")
+          ),
+
+          tabPanel("Favorites",
+             br(),
+             favorites_panel_ui(
+               "favorites_iter1",
+               intro = "Favorites starred from Iteratie 1's charts. See the main Favorites tab for the combined list across every iteration."
+             )
           )
         )
       )
@@ -2427,6 +2443,15 @@ ui <- navbarPage(
             )
           )
         )
+      ),
+
+      tabPanel(
+        "Favorites",
+        br(),
+        favorites_panel_ui(
+          "favorites_iter3",
+          intro = "Favorites starred from Iteratie 3's charts. See the main Favorites tab for the combined list across every iteration."
+        )
       )
     )
   ),
@@ -2451,6 +2476,32 @@ server <- function(input, output, session) {
       "Iteratie 1" = "iter1_tabs",
       "Iteratie 2" = "iter2_tabs",
       "Iteratie 3" = "iter3_tabs"
+    ),
+    # Scopes each chart's provenance log (datasheet corner cell) to just its
+    # own inputs, instead of every non-plumbing input in the whole app. The
+    # two top50 pairs (main/compare) genuinely share one input namespace
+    # apiece, so main/cmp -- and prest_main/prest_cmp -- intentionally get
+    # the same prefix; the negative lookahead on the plain top50 prefix keeps
+    # it from also matching the "_prest_" pair's inputs.
+    dl_option_prefixes = c(
+      "iter1_basis_dl"      = "^pop_",
+      "iter1_totaal_dl"     = "^tot_",
+      "iter1_tijd_dl"       = "^mnd_",
+      "iter1_cost_dl"       = "^cost_",
+      "iter1_bfly_dl"       = "^butterfly_",
+      "iter1_int_dl"        = "^int_",
+      "iter2_agg_dl"        = "^agg_",
+      "iter2_hm_dl"         = "^hm_",
+      "iter2_top_dl"        = "^top_",
+      "iter3_cost_dl"       = "^it3_cost_",
+      "iter3_zpk_dl"        = "^it3_zpk_",
+      "iter3_top50_main_dl" = "^it3_top50_(?!prest_)",
+      "iter3_top50_cmp_dl"  = "^it3_top50_(?!prest_)",
+      "iter3_prest_main_dl" = "^it3_top50_prest_",
+      "iter3_prest_cmp_dl"  = "^it3_top50_prest_",
+      "iter3_acp_dl"        = "^it3_acp_",
+      "iter3_zvwk_dl"       = "^it3_zvwk_",
+      "iter3_reg_dl"        = "^it3_reg_"
     )
   )
 
@@ -6698,6 +6749,9 @@ server <- function(input, output, session) {
   )
 
   favorites_panel_server("favorites")
+  favorites_panel_server("favorites_iter1", tab_label_filter = "Iteratie 1")
+  favorites_panel_server("favorites_iter2", tab_label_filter = "Iteratie 2")
+  favorites_panel_server("favorites_iter3", tab_label_filter = "Iteratie 3")
   export_history_panel_server("export_history")
   template_admin_server("template_admin")
 }
