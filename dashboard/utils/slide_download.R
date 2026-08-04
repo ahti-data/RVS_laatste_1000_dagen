@@ -576,6 +576,44 @@ tc_order_slide_matrix <- function(m, mode = "auto") {
   m[, c(1, 1 + ord), drop = FALSE]
 }
 
+#' Reorder a think-cell matrix's *category* axis -- its rows or its columns,
+#' depending on chart type (see [tc_chart_types_transposed()]) -- to match a
+#' given left-to-right order, so the plain reference `_table.xlsx` a PM
+#' opens reads in the same category order as the slide's own chart, without
+#' the caller needing to know or care which axis a given chart type's own
+#' table puts categories on (`slide_matrix`, in contrast, always keeps
+#' categories as columns, by construction -- see [tc_slide_orientation()]).
+#' A faceted workbook (named list of data frames, one per facet) is
+#' reordered facet-by-facet; a facet whose categories don't cleanly match
+#' `ordered_categories` 1:1 is left untouched rather than guessed at.
+#' @param m A think-cell matrix, or a named list of them (faceted).
+#' @param ordered_categories Character vector: the desired left-to-right
+#'   category order (typically `names(slide_matrix)[-1]` after
+#'   [tc_order_slide_matrix()] has already been applied to that matrix).
+#' @return `m`, reordered where possible; unchanged otherwise.
+tc_reorder_by_categories <- function(m, ordered_categories) {
+  if (is.null(ordered_categories) || length(ordered_categories) == 0) return(m)
+
+  reorder_one <- function(mat) {
+    mat <- as.data.frame(mat, stringsAsFactors = FALSE, check.names = FALSE)
+    if (ncol(mat) < 2) return(mat)
+
+    cols <- names(mat)[-1]
+    if (length(ordered_categories) == length(cols) && all(ordered_categories %in% cols)) {
+      return(mat[, c(1, 1 + match(ordered_categories, cols)), drop = FALSE])
+    }
+
+    row_labels <- as.character(mat[[1]])
+    if (length(ordered_categories) == length(row_labels) && all(ordered_categories %in% row_labels)) {
+      return(mat[match(ordered_categories, row_labels), , drop = FALSE])
+    }
+
+    mat
+  }
+
+  if (is_tc_workbook_list(m)) lapply(m, reorder_one) else reorder_one(m)
+}
+
 #' Windows-safe path for embedding in the .ppttc `template` field.
 #'
 #' think-cell's `ppttc` can fail to load templates whose path contains spaces or
@@ -888,10 +926,6 @@ tc_build_slide_zip <- function(zip_path,
     unlink(work, recursive = TRUE, force = TRUE)
   }, add = TRUE)
 
-  # ---- (2) underlying table (identical to the think-cell table download) ----
-  table_path <- file.path(work, paste0(filename_prefix, "_table.xlsx"))
-  write_table_fun(tc_data, table_path)
-
   # think-cell renders a single matrix. The caller may pass a pre-oriented
   # `slide_matrix` (already reflecting the displayed plot type); otherwise derive
   # it from the table data and orient it for the templates.
@@ -908,6 +942,13 @@ tc_build_slide_zip <- function(zip_path,
     sprintf("data has %d facets; slide shows first facet '%s', table contains all facets",
             length(tc_data), names(tc_data)[[1]])
   } else NULL
+
+  # ---- (2) underlying table (identical to the think-cell table download,
+  # but with its own category axis reordered to match the slide's -- see
+  # tc_reorder_by_categories() -- so a PM opening this workbook alongside the
+  # rendered slide sees the same order, not just the .pptx chart itself) ----
+  table_path <- file.path(work, paste0(filename_prefix, "_table.xlsx"))
+  write_table_fun(tc_reorder_by_categories(tc_data, names(slide_matrix)[-1]), table_path)
 
   rendered <- FALSE
 

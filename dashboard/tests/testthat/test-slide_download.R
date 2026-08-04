@@ -388,6 +388,80 @@ test_that("category ordering matches the displayed numeric axis", {
   expect_equal(names(tc_order_slide_matrix(mm, "auto"))[-1], c("mrt", "jan", "feb"))
 })
 
+test_that("tc_reorder_by_categories reorders whichever axis holds the categories", {
+  # Column-oriented (categories as columns, e.g. slide_matrix's own shape).
+  col_mat <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                        lab = "Overleden", a = 1, b = 2, c = 3)
+  names(col_mat)[1] <- ""
+  reordered_cols <- tc_reorder_by_categories(col_mat, c("c", "a", "b"))
+  expect_equal(names(reordered_cols)[-1], c("c", "a", "b"))
+  expect_equal(reordered_cols[[2]], 3)  # "c"'s original value follows it
+
+  # Row-oriented (categories as rows, e.g. a bar/grouped_bar/stacked_bar
+  # chart type's own tc_data shape -- see tc_chart_types_transposed()).
+  row_mat <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                        lab = c("a", "b", "c"), Overleden = c(1, 2, 3))
+  names(row_mat)[1] <- ""
+  reordered_rows <- tc_reorder_by_categories(row_mat, c("c", "a", "b"))
+  expect_equal(reordered_rows[[1]], c("c", "a", "b"))
+  expect_equal(reordered_rows[[2]], c(3, 1, 2))
+
+  # A category list that doesn't cleanly match either axis is a no-op.
+  unchanged <- tc_reorder_by_categories(row_mat, c("x", "y"))
+  expect_equal(unchanged, row_mat)
+
+  # NULL/empty ordered_categories is a no-op.
+  expect_equal(tc_reorder_by_categories(row_mat, NULL), row_mat)
+})
+
+test_that("tc_reorder_by_categories reorders a faceted workbook facet-by-facet", {
+  facet1 <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                       lab = c("a", "b"), Overleden = c(10, 20))
+  names(facet1)[1] <- ""
+  facet2 <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                       lab = c("a", "b"), Overleden = c(30, 40))
+  names(facet2)[1] <- ""
+  wb <- list(F1 = facet1, F2 = facet2)
+
+  result <- tc_reorder_by_categories(wb, c("b", "a"))
+  expect_equal(result$F1[[1]], c("b", "a"))
+  expect_equal(result$F1[[2]], c(20, 10))
+  expect_equal(result$F2[[1]], c("b", "a"))
+  expect_equal(result$F2[[2]], c(40, 30))
+})
+
+test_that("tc_build_slide_zip's _table.xlsx category order matches the ordered slide_matrix, even when tc_data puts categories on a different axis", {
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  # "grouped_bar" is one of the transposed chart types (tc_chart_types_transposed())
+  # -- its own tc_data shape puts categories as ROWS, unlike slide_matrix which
+  # always keeps them as columns. Regression test for a real production bug:
+  # the slide's own chart correctly reordered by slide_order, but the
+  # companion _table.xlsx (built from raw, un-reordered tc_data) still read
+  # in the original, unordered row order.
+  tc_data <- data.frame(
+    check.names = FALSE, stringsAsFactors = FALSE,
+    lab = c("zorgdomein_a", "zorgdomein_b", "zorgdomein_c"),
+    Overleden = c(30, 10, 20)
+  )
+  names(tc_data)[1] <- ""
+
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    zip_path = z, tc_data = tc_data, chart_type = "grouped_bar",
+    filename_prefix = "chart", templates_dir = templates_dir,
+    slide_order = "val_asc", ppttc_exe = NA
+  )
+
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  table <- as.data.frame(
+    readxl::read_excel(file.path(extract_dir, "chart_table.xlsx"), col_names = FALSE)
+  )
+  # val_asc ascending by value: b (10) < c (20) < a (30)
+  expect_equal(as.character(table[[1]][-1]), c("zorgdomein_b", "zorgdomein_c", "zorgdomein_a"))
+})
+
 test_that("tc_numeric_or_na handles numeric strings and decimals", {
   expect_equal(tc_numeric_or_na(c("-1", "-10", "-2")), c(-1, -10, -2))
   expect_equal(tc_numeric_or_na(c("1,5", "2,5")), c(1.5, 2.5))
