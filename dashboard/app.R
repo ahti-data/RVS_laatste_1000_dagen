@@ -5639,6 +5639,9 @@ server <- function(input, output, session) {
     choices <- view_choices_for(agg_raw() |> dplyr::filter(name %in% selected_agg_names()))
     if (is.null(view) || !view %in% choices) view <- choices[[1]]
 
+    split_col <- effective_agg_split()
+    has_split <- split_col != "none" && split_col %in% names(df_plot)
+
     multiple_outcomes <- dplyr::n_distinct(df_plot$name) > 1
     multiple_versions <- dplyr::n_distinct(df_plot$versie) > 1
     version_labels_bar <- c("Geobserveerd" = "Niet gecorrigeerd", "Inflatiecorrectie" = "Inflatiecorrectie")
