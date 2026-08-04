@@ -130,6 +130,16 @@ TC_TEMPLATE_PICKER_RENDER_JS <- r"(
 #'   PNG (see [TC_FAVORITE_CAPTURE_JS]) for inclusion in the favorites deck
 #'   ZIP. Omit for charts with no Plotly widget (e.g. `renderPlot()`-based) --
 #'   the favorite is still saved, just without an image.
+#' @param default_slide_order Initial "Category order" selection (one of
+#'   `"auto"`, `"as_is"`, `"cat_asc"`, `"cat_desc"`, `"val_asc"`,
+#'   `"val_desc"` -- see [tc_order_slide_matrix()]). `"auto"` only reorders
+#'   by *numeric* category value (e.g. years); for a chart whose plot instead
+#'   orders a text category by `reorder(category, value)` (ascending mean),
+#'   set this to `"val_asc"`/`"val_desc"` to match so the exported table
+#'   reads in the same order as the chart on screen, instead of "auto"
+#'   silently falling back to whatever order the data happens to arrive in.
+#'   Still just the *default* -- the dropdown remains user-changeable per
+#'   download.
 chart_data_downloads_ui <- function(
     id,
     chart_type,
@@ -137,7 +147,8 @@ chart_data_downloads_ui <- function(
     thinkcell_label = "Download data (think-cell)",
     slide_label = "Download slide (PowerPoint)",
     favorite_label = "☆ Save as favorite",
-    plot_output_id = NULL
+    plot_output_id = NULL,
+    default_slide_order = "auto"
 ) {
   ns <- shiny::NS(id)
 
@@ -202,7 +213,7 @@ chart_data_downloads_ui <- function(
             "Value ascending"                     = "val_asc",
             "Value descending"                    = "val_desc"
           ),
-          selected = "auto"
+          selected = default_slide_order
         ),
         shiny::uiOutput(ns("slide_template_info")),
         shiny::tags$div(
