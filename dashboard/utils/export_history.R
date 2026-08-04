@@ -9,17 +9,19 @@
 #' `tc_build_ppttc_slide_block()` in `utils/slide_download.R`), so a chart
 #' spotted in a real PowerPoint deck can be traced back here.
 #'
-#' Two ways to get a chart back:
-#'   * Per-row "Redownload" -- always an exact-snapshot replay of that one
-#'     entry, instant, no lookup needed.
-#'   * Paste a download id (or a shared `favorite_download_id` from a bulk
-#'     download) into the "Regenerate" control -- rebuilds against *today's*
-#'     live dashboard data when that chart's module is still registered in
-#'     this session (see `tc_chart_registry_get()` in
-#'     `utils/slide_download.R`), falling back to the last-known snapshot
-#'     otherwise. Either way, every regenerate mints brand-new ids and logs
-#'     a fresh entry -- it never overwrites or reuses the one that was
-#'     pasted in.
+#' Two ways to get a chart back, both available per-row and (via the
+#' checkboxes + bottom banner) across an arbitrary multi-row selection:
+#'   * "Redownload" -- always an exact-snapshot replay, instant, no lookup
+#'     needed. Selecting several rows combines them into one deck instead of
+#'     one zip per click.
+#'   * "Regenerate" -- rebuilds against *today's* live dashboard data when a
+#'     chart's module is still registered in this session (see
+#'     `tc_chart_registry_get()` in `utils/slide_download.R`), falling back
+#'     to the last-known snapshot otherwise. Every regenerate mints
+#'     brand-new ids and logs a fresh entry -- it never overwrites or reuses
+#'     the one it started from. Selecting several rows mints one shared
+#'     `favorite_download_id` across the whole regenerated batch, same as a
+#'     bulk "Download all favorites" click.
 
 #' One JSON file per entry (`state/export_history/<id>.json`) rather than one
 #' growing array, so appending never rewrites the whole log -- same reasoning
@@ -209,26 +211,6 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
 # was pasted in.
 # ---------------------------------------------------------------------------
 
-#' Resolve a pasted id to the history entries it should regenerate.
-#' @param id A download id (`exp_...`) or a bulk `favorite_download_id`
-#'   (`favdl_...`).
-#' @return `list(type = "solo"|"bulk", entries = list(...))`, or `NULL` if
-#'   nothing matches.
-export_history_resolve_regenerate_target <- function(id) {
-  id <- trimws(tc_or(id, ""))
-  if (!nzchar(id)) return(NULL)
-  entries <- export_history_list()
-
-  if (startsWith(id, "favdl_")) {
-    bulk <- Filter(function(e) identical(tc_or(e$favorite_download_id, ""), id), entries)
-    if (length(bulk) > 0) return(list(type = "bulk", entries = bulk))
-    return(NULL)
-  }
-  solo <- Filter(function(e) identical(tc_or(e$id, ""), id), entries)
-  if (length(solo) > 0) return(list(type = "solo", entries = solo))
-  NULL
-}
-
 #' Regenerate one history entry as a standalone ZIP (used for a solo
 #' regenerate) -- live, via the session's chart registry, when possible;
 #' otherwise an exact-snapshot rebuild, same as [export_history_redownload()]
@@ -365,29 +347,86 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
   ))
 }
 
-#' Regenerate a solo download or an entire bulk-download group, identified by
-#' a pasted `download_id` or `favorite_download_id` (see
-#' [export_history_resolve_regenerate_target()]). A solo regenerate writes a
-#' standalone ZIP, same shape as the original "Download slide" click; a bulk
-#' regenerate combines every member into one deck (same shape as "Download
-#' all favorites"), sharing one fresh `favorite_download_id`.
-#' @return `list(bulk, live_count, total)`, invisibly.
-export_history_regenerate <- function(id, zip_path, session, templates_dir = NULL, ppttc_exe = NULL) {
-  target <- export_history_resolve_regenerate_target(id)
-  if (is.null(target)) {
-    stop("No download or bulk download found for id: ", id, call. = FALSE)
+#' Build one [tc_build_deck_from_specs()]-shaped spec straight from a stored
+#' history entry's frozen snapshot -- no session/registry involved, and no
+#' new id minted (this is an exact redownload, not a regenerate: the spec
+#' keeps the entry's own `id`/`favorite_download_id` as-is). This is the same
+#' "pick slide_matrix_table over tc_data_table, rebuild the corner-cell log"
+#' logic [export_history_prepare_regenerate_spec()]'s fallback branch already
+#' does, extracted so both share it instead of a third near-duplicate.
+#' @param entry A history entry (as returned by [export_history_get()]).
+#' @param templates_dir Optional templates directory override (mainly for tests).
+export_history_snapshot_spec <- function(entry, templates_dir = NULL) {
+  tpl_path <- tc_template_for_chart_type(
+    entry$chart_type, templates_dir = templates_dir,
+    override = tc_or(entry$template_override, "")
+  )
+  datasheet_log <- tc_build_datasheet_log(
+    dashboard_title = tc_or(entry$dashboard_title, ""), tab_label = tc_or(entry$tab_label, ""),
+    subtab_label = tc_or(entry$subtab_label, ""), chart_type = entry$chart_type,
+    selections = entry$selections, chart_id = entry$id,
+    favorite_download_id = entry$favorite_download_id,
+    source_output = tc_or(entry$source_output, ""), source_sheet = tc_or(entry$source_sheet, "")
+  )
+  slide_matrix <- if (!is.null(entry$slide_matrix_table)) {
+    favorites_table_as_df(entry$slide_matrix_table)
+  } else {
+    favorites_table_as_df(entry$tc_data_table)
   }
 
-  if (identical(target$type, "solo")) {
+  list(
+    label             = tc_or(entry$label, "chart"),
+    tc_table          = slide_matrix,
+    raw_table         = NULL,
+    chart_type        = entry$chart_type,
+    template_path     = tpl_path,
+    slide_title       = tc_or(entry$slide_title, ""),
+    figure_title      = tc_or(entry$figure_title, ""),
+    download_id       = entry$id,
+    favorite_download_id = entry$favorite_download_id,
+    datasheet_log     = datasheet_log,
+    asset_path        = NULL
+  )
+}
+
+#' Exact-snapshot redownload of an arbitrary list of history entries (the
+#' Export History tab's checkbox-driven "Redownload selected"). One entry
+#' replays [export_history_redownload()] unchanged; two or more combine into
+#' a single deck -- same shape "Download all favorites" produces -- via
+#' [export_history_snapshot_spec()] + [tc_build_deck_from_specs()]. No new
+#' history entries are logged; a redownload isn't a new export.
+#' @param entries List of history entries.
+#' @return `zip_path`, invisibly.
+export_history_download_many <- function(entries, zip_path, ppttc_exe = NULL, templates_dir = NULL) {
+  if (length(entries) == 1) {
+    return(export_history_redownload(entries[[1]], zip_path, templates_dir = templates_dir, ppttc_exe = ppttc_exe))
+  }
+  specs <- lapply(entries, export_history_snapshot_spec, templates_dir = templates_dir)
+  tc_build_deck_from_specs(specs, zip_path, ppttc_exe)
+}
+
+#' Regenerate an arbitrary list of history entries against today's live
+#' dashboard data where possible (the Export History tab's per-row
+#' "Regenerate" button and checkbox-driven "Regenerate selected"). One entry
+#' delegates to [export_history_regenerate_entry()] unchanged, writing a
+#' standalone ZIP; two or more mint one shared `favorite_download_id` + one
+#' `batch_created_at` (same as a bulk "Download all favorites" click), call
+#' [export_history_prepare_regenerate_spec()] per entry, then combine into
+#' one deck via [tc_build_deck_from_specs()]. Every regenerate mints
+#' brand-new ids -- it never touches the entries passed in.
+#' @param entries List of history entries.
+#' @return `list(live_count, total)`, invisibly.
+export_history_regenerate_many <- function(entries, zip_path, session, templates_dir = NULL, ppttc_exe = NULL) {
+  if (length(entries) == 1) {
     res <- export_history_regenerate_entry(
-      target$entries[[1]], zip_path, session, templates_dir = templates_dir, ppttc_exe = ppttc_exe
+      entries[[1]], zip_path, session, templates_dir = templates_dir, ppttc_exe = ppttc_exe
     )
-    return(invisible(list(bulk = FALSE, live_count = if (isTRUE(res$live)) 1 else 0, total = 1)))
+    return(invisible(list(live_count = if (isTRUE(res$live)) 1 else 0, total = 1)))
   }
 
   new_favorite_download_id <- favorites_download_new_id()
   batch_created_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
-  prepared <- lapply(target$entries, function(e) {
+  prepared <- lapply(entries, function(e) {
     export_history_prepare_regenerate_spec(
       e, session, favorite_download_id = new_favorite_download_id,
       created_at = batch_created_at, templates_dir = templates_dir
@@ -396,7 +435,7 @@ export_history_regenerate <- function(id, zip_path, session, templates_dir = NUL
   specs <- lapply(prepared, function(p) p$spec)
   live_count <- sum(vapply(prepared, function(p) isTRUE(p$live), logical(1)))
   tc_build_deck_from_specs(specs, zip_path, ppttc_exe)
-  invisible(list(bulk = TRUE, live_count = live_count, total = length(specs)))
+  invisible(list(live_count = live_count, total = length(specs)))
 }
 
 #' Compact breadcrumb + chart-type/template line for one history row.
@@ -419,27 +458,16 @@ export_history_panel_ui <- function(id) {
       "Every “Download slide” click is logged here automatically, so a chart from a ",
       "while back can be redownloaded exactly as it was — no need to keep the original ZIP ",
       "around. Find a chart's id on its rendered slide or in its datasheet's corner cell, ",
-      "then look it up below."
+      "or search for it below. Each row also has its own instant Redownload/Regenerate ",
+      "buttons; check one or more rows to act on them together."
     ),
     shiny::textInput(
       ns("search"), NULL,
       placeholder = "Search by download id, dashboard, tab, sub-tab, or chart type..."
     ),
     shiny::tags$hr(),
-    shiny::h4("Regenerate"),
-    shiny::p(
-      class = "text-muted", style = "font-size:12px;",
-      "Paste a download id or a bulk download id to rebuild it against today's dashboard ",
-      "data (not the frozen snapshot) — always as a brand-new id, never overwriting the ",
-      "original."
-    ),
-    shiny::fluidRow(
-      shiny::column(8, shiny::textInput(ns("regenerate_id"), NULL, placeholder = "download_id or favorite_download_id")),
-      shiny::column(4, shiny::actionButton(ns("regenerate_lookup"), "Look up"))
-    ),
-    shiny::uiOutput(ns("regenerate_preview")),
-    shiny::tags$hr(),
-    shiny::uiOutput(ns("list"))
+    shiny::uiOutput(ns("list")),
+    shiny::uiOutput(ns("selection_banner"))
   )
 }
 
@@ -528,7 +556,20 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
     # grouping/ordering itself.
     display_rows <- shiny::reactive(export_history_group_rows(filtered_entries()))
 
+    # Selection state for the checkbox-driven bottom banner. A row's checkbox
+    # id is its entry `id` for a solo row or its `favorite_download_id` for a
+    # group row -- a group is selected/acted on as one unit, consistent with
+    # how it already regenerates as one unit. Stored in `selected`
+    # (reactiveValues) rather than read directly from `input[[...]]`, because
+    # a freshly-rendered checkboxInput (renderUI can re-run on any poll tick,
+    # e.g. someone else logs a new export while rows are checked) resets to
+    # its `value=` argument -- each row is rendered with
+    # `value = isTRUE(selected[[row_id]])` so it survives that.
+    selected <- shiny::reactiveValues()
+    registered_checkboxes <- new.env()
+
     entry_row_ui <- function(e, indent = FALSE) {
+      row_id <- e$id
       shiny::tags$div(
         style = paste(
           "display:flex; justify-content:space-between; align-items:flex-start;",
@@ -536,35 +577,49 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
           if (indent) "margin-left:24px;" else ""
         ),
         shiny::tags$div(
-          shiny::tags$strong(tc_or(e$label, "(untitled)")),
-          shiny::tags$code(style = "font-size:11px; margin-left:8px; color:#6B7280;", tc_or(e$id, "")),
+          style = "display:flex; gap:8px; align-items:flex-start;",
+          if (!indent) shiny::checkboxInput(session$ns(paste0("sel_", row_id)), NULL, value = isTRUE(selected[[row_id]])),
           shiny::tags$div(
-            style = "font-size:12px; color:#6B7280;",
-            tc_history_entry_subtitle(e)
-          ),
-          shiny::tags$div(
-            style = "font-size:11px; color:#9CA3AF;",
-            paste(Filter(nzchar, c(tc_or(e$chart_type, ""), tc_or(e$template_name, ""))), collapse = " · ")
-          ),
-          if (nzchar(tc_or(e$created_at, ""))) shiny::tags$div(
-            style = "font-size:11px; color:#9CA3AF;",
-            paste0("Downloaded: ", e$created_at)
+            shiny::tags$strong(tc_or(e$label, "(untitled)")),
+            shiny::tags$code(style = "font-size:11px; margin-left:8px; color:#6B7280;", tc_or(e$id, "")),
+            shiny::tags$div(
+              style = "font-size:12px; color:#6B7280;",
+              tc_history_entry_subtitle(e)
+            ),
+            shiny::tags$div(
+              style = "font-size:11px; color:#9CA3AF;",
+              paste(Filter(nzchar, c(tc_or(e$chart_type, ""), tc_or(e$template_name, ""))), collapse = " · ")
+            ),
+            if (nzchar(tc_or(e$created_at, ""))) shiny::tags$div(
+              style = "font-size:11px; color:#9CA3AF;",
+              paste0("Downloaded: ", e$created_at)
+            )
           )
         ),
-        shiny::downloadButton(
-          session$ns(paste0("redownload_", e$id)), "Redownload",
-          class = "btn-default btn-sm"
+        shiny::tags$div(
+          style = "display:flex; gap:6px; flex-shrink:0;",
+          shiny::downloadButton(
+            session$ns(paste0("redownload_", e$id)), "Redownload",
+            class = "btn-default btn-sm"
+          ),
+          shiny::downloadButton(
+            session$ns(paste0("regenerate_", e$id)), "Regenerate",
+            class = "btn-default btn-sm"
+          )
         )
       )
     }
 
     group_row_ui <- function(g) {
       is_open <- isTRUE(expanded[[g$favorite_download_id]])
+      row_id <- g$favorite_download_id
       shiny::tags$div(
         style = "padding:8px 0; border-bottom:1px solid #eee;",
         shiny::tags$div(
           style = "display:flex; justify-content:space-between; align-items:center; gap:12px;",
           shiny::tags$div(
+            style = "display:flex; gap:8px; align-items:center;",
+            shiny::checkboxInput(session$ns(paste0("sel_", row_id)), NULL, value = isTRUE(selected[[row_id]])),
             shiny::actionLink(
               session$ns(paste0("toggle_", g$favorite_download_id)),
               label = sprintf("%s \U0001F4E6 Bulk download — %d charts",
@@ -575,6 +630,10 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
               style = "font-size:11px; color:#9CA3AF;",
               paste0("Downloaded: ", g$created_at)
             )
+          ),
+          shiny::downloadButton(
+            session$ns(paste0("regenerate_group_", g$favorite_download_id)), "Regenerate",
+            class = "btn-default btn-sm"
           )
         ),
         if (is_open) shiny::tagList(lapply(g$members, function(m) entry_row_ui(m, indent = TRUE)))
@@ -607,10 +666,32 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       do.call(shiny::tagList, c(list(cap_note), row_uis))
     })
 
-    # (Re)register one download handler per currently-listed entry, mirroring
-    # favorites_panel_server()'s equivalent pattern for its remove buttons.
-    # History entries are immutable once written, so re-registering on every
-    # poll tick is harmless -- just re-reads the same on-disk snapshot.
+    # Map every currently-displayed, individually-selectable row id (a solo
+    # entry's own id, or a group's favorite_download_id) to its flattened
+    # entry list -- a checked group expands to all its members.
+    row_id_index <- shiny::reactive({
+      idx <- list()
+      for (r in display_rows()) {
+        if (identical(r$kind, "group")) {
+          idx[[r$favorite_download_id]] <- r$members
+        } else {
+          idx[[r$entry$id]] <- list(r$entry)
+        }
+      }
+      idx
+    })
+
+    selected_entries <- shiny::reactive({
+      idx <- row_id_index()
+      ids <- Filter(function(rid) isTRUE(selected[[rid]]), names(idx))
+      unlist(idx[ids], recursive = FALSE)
+    })
+
+    # (Re)register one redownload + one regenerate download handler per
+    # currently-listed entry, mirroring favorites_panel_server()'s equivalent
+    # pattern for its remove buttons. History entries are immutable once
+    # written, so re-registering on every poll tick is harmless -- just
+    # re-reads the same on-disk snapshot.
     shiny::observe({
       entries <- entries_reactive()
       lapply(entries, function(e) {
@@ -622,6 +703,28 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
             },
             content = function(file) {
               export_history_redownload(entry, file)
+            }
+          )
+          output[[paste0("regenerate_", entry$id)]] <- shiny::downloadHandler(
+            filename = function() {
+              paste0(tc_or(entry$filename_prefix, "chart"), "_slide_regenerated_", Sys.Date(), ".zip")
+            },
+            content = function(file) {
+              export_history_regenerate_many(list(entry), file, session)
+            }
+          )
+        })
+      })
+
+      bulk_ids <- unique(Filter(nzchar, vapply(entries, function(e) tc_or(e$favorite_download_id, ""), character(1))))
+      lapply(bulk_ids, function(gid) {
+        local({
+          group_id <- gid
+          output[[paste0("regenerate_group_", group_id)]] <- shiny::downloadHandler(
+            filename = function() paste0("favorites_deck_regenerated_", Sys.Date(), ".zip"),
+            content = function(file) {
+              members <- Filter(function(e) identical(tc_or(e$favorite_download_id, ""), group_id), entries)
+              export_history_regenerate_many(members, file, session)
             }
           )
         })
@@ -649,58 +752,66 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       })
     })
 
-    # ---- Regenerate: look up a pasted id, then confirm + download --------
-    regenerate_target <- shiny::reactiveVal(NULL)
-    regenerate_error  <- shiny::reactiveVal(NULL)
+    # Same lazy-registration pattern as the toggles above, but for each row's
+    # checkbox -- an observeEvent isn't idempotent, so this must only ever
+    # register once per row id.
+    shiny::observe({
+      row_ids <- names(row_id_index())
+      new_ids <- Filter(function(rid) !exists(rid, envir = registered_checkboxes, inherits = FALSE), row_ids)
+      lapply(new_ids, function(rid) {
+        assign(rid, TRUE, envir = registered_checkboxes)
+        input_id <- paste0("sel_", rid)
+        shiny::observeEvent(input[[input_id]], {
+          selected[[rid]] <- isTRUE(input[[input_id]])
+        }, ignoreInit = TRUE, ignoreNULL = FALSE)
+      })
+    })
 
-    shiny::observeEvent(input$regenerate_lookup, {
-      target <- export_history_resolve_regenerate_target(input$regenerate_id)
-      if (is.null(target)) {
-        regenerate_target(NULL)
-        regenerate_error(sprintf(
-          "No download or bulk download found for '%s'.",
-          trimws(tc_or(input$regenerate_id, ""))
-        ))
-      } else {
-        regenerate_target(target)
-        regenerate_error(NULL)
+    shiny::observeEvent(input$clear_selection, {
+      for (rid in ls(registered_checkboxes)) {
+        selected[[rid]] <- FALSE
+        shiny::updateCheckboxInput(session, paste0("sel_", rid), value = FALSE)
       }
     })
 
-    output$regenerate_preview <- shiny::renderUI({
-      err <- regenerate_error()
-      if (!is.null(err)) {
-        return(shiny::tags$p(style = "color:#991B1B; font-size:12px;", err))
-      }
-      target <- regenerate_target()
-      shiny::req(target)
-      desc <- if (identical(target$type, "solo")) {
-        e <- target$entries[[1]]
-        sprintf("Chart: %s (%s)", tc_or(e$label, "(untitled)"), tc_history_entry_subtitle(e))
-      } else {
-        sprintf("Bulk download — %d charts", length(target$entries))
-      }
-      shiny::tagList(
-        shiny::tags$p(style = "font-size:12px; color:#374151;", desc),
-        shiny::downloadButton(session$ns("regenerate_download"), "Regenerate against today's data",
-                              class = "btn-primary btn-sm")
+    output$selection_banner <- shiny::renderUI({
+      entries <- selected_entries()
+      if (length(entries) == 0) return(NULL)
+      shiny::tags$div(
+        style = paste(
+          "position:fixed; left:0; right:0; bottom:0; z-index:1000;",
+          "background:#111827; color:#fff; padding:10px 20px;",
+          "display:flex; align-items:center; justify-content:center; gap:16px; flex-wrap:wrap;",
+          "box-shadow:0 -2px 8px rgba(0,0,0,0.15);"
+        ),
+        sprintf("%d chart(s) selected", length(entries)),
+        shiny::actionLink(session$ns("clear_selection"), "Clear selection", style = "color:#93C5FD;"),
+        shiny::downloadButton(
+          session$ns("download_selected"), "Redownload selected",
+          class = "btn-default btn-sm"
+        ),
+        shiny::downloadButton(
+          session$ns("regenerate_selected"), "Regenerate selected against today's data",
+          class = "btn-primary btn-sm"
+        )
       )
     })
 
-    output$regenerate_download <- shiny::downloadHandler(
-      filename = function() {
-        target <- regenerate_target()
-        if (is.null(target)) return("regenerate.zip")
-        if (identical(target$type, "bulk")) {
-          paste0("favorites_deck_regenerated_", Sys.Date(), ".zip")
-        } else {
-          paste0(tc_or(target$entries[[1]]$filename_prefix, "chart"), "_slide_regenerated_", Sys.Date(), ".zip")
-        }
-      },
+    output$download_selected <- shiny::downloadHandler(
+      filename = function() paste0("export_history_selected_", Sys.Date(), ".zip"),
       content = function(file) {
-        target <- regenerate_target()
-        shiny::req(target)
-        export_history_regenerate(trimws(tc_or(input$regenerate_id, "")), file, session)
+        entries <- selected_entries()
+        shiny::req(length(entries) > 0)
+        export_history_download_many(entries, file)
+      }
+    )
+
+    output$regenerate_selected <- shiny::downloadHandler(
+      filename = function() paste0("export_history_selected_regenerated_", Sys.Date(), ".zip"),
+      content = function(file) {
+        entries <- selected_entries()
+        shiny::req(length(entries) > 0)
+        export_history_regenerate_many(entries, file, session)
       }
     )
   })

@@ -221,36 +221,6 @@ test_that("export_history_group_rows handles an empty entry list", {
 # so this is a faithful, dependency-free substitute for these tests.
 fake_session <- function() list(userData = new.env())
 
-test_that("export_history_resolve_regenerate_target finds a solo entry by its own id", {
-  with_history_dir({
-    id <- export_history_add(list(label = "Chart One", chart_type = "line"))
-    target <- export_history_resolve_regenerate_target(id)
-    expect_equal(target$type, "solo")
-    expect_length(target$entries, 1)
-    expect_equal(target$entries[[1]]$id, id)
-  })
-})
-
-test_that("export_history_resolve_regenerate_target finds every entry sharing a favorite_download_id", {
-  with_history_dir({
-    export_history_add(list(label = "A", favorite_download_id = "favdl_group1"))
-    export_history_add(list(label = "B", favorite_download_id = "favdl_group1"))
-    export_history_add(list(label = "C", favorite_download_id = "favdl_other"))
-
-    target <- export_history_resolve_regenerate_target("favdl_group1")
-    expect_equal(target$type, "bulk")
-    expect_length(target$entries, 2)
-  })
-})
-
-test_that("export_history_resolve_regenerate_target returns NULL for an unknown id", {
-  with_history_dir({
-    expect_null(export_history_resolve_regenerate_target("exp_does_not_exist"))
-    expect_null(export_history_resolve_regenerate_target("favdl_does_not_exist"))
-    expect_null(export_history_resolve_regenerate_target(""))
-  })
-})
-
 test_that("export_history_regenerate_entry falls back to a snapshot rebuild when the chart isn't registered", {
   skip_if_not(have_templates, "templates directory not available")
   with_history_dir({
@@ -307,7 +277,7 @@ test_that("export_history_regenerate_entry uses the live build function when the
   })
 })
 
-test_that("export_history_regenerate solo path mints a fresh download id, never reusing the pasted one", {
+test_that("export_history_regenerate_many with one entry delegates to export_history_regenerate_entry", {
   skip_if_not(have_templates, "templates directory not available")
   with_history_dir({
     entry <- tc_history_capture(
@@ -319,8 +289,8 @@ test_that("export_history_regenerate solo path mints a fresh download id, never 
     export_history_add(entry)
 
     z <- tempfile(fileext = ".zip")
-    res <- export_history_regenerate(entry$id, z, fake_session(), templates_dir = templates_dir, ppttc_exe = NA)
-    expect_false(res$bulk)
+    res <- export_history_regenerate_many(list(entry), z, fake_session(), templates_dir = templates_dir, ppttc_exe = NA)
+    expect_equal(res$total, 1)
 
     history <- export_history_list()
     expect_length(history, 2)
@@ -330,7 +300,7 @@ test_that("export_history_regenerate solo path mints a fresh download id, never 
   })
 })
 
-test_that("export_history_regenerate bulk path mints one fresh favorite_download_id shared by every member", {
+test_that("export_history_regenerate_many with 2+ entries mints one fresh favorite_download_id shared by every member", {
   skip_if_not(have_templates, "templates directory not available")
   with_history_dir({
     e1 <- tc_history_capture(
@@ -349,8 +319,7 @@ test_that("export_history_regenerate bulk path mints one fresh favorite_download
     export_history_add(e2)
 
     z <- tempfile(fileext = ".zip")
-    res <- export_history_regenerate("favdl_original", z, fake_session(), templates_dir = templates_dir, ppttc_exe = NA)
-    expect_true(res$bulk)
+    res <- export_history_regenerate_many(list(e1, e2), z, fake_session(), templates_dir = templates_dir, ppttc_exe = NA)
     expect_equal(res$total, 2)
 
     history <- export_history_list()
@@ -363,6 +332,73 @@ test_that("export_history_regenerate bulk path mints one fresh favorite_download
     expect_length(regenerated, 2)
     expect_equal(length(unique(vapply(regenerated, function(e) e$favorite_download_id, character(1)))), 1)
 
+    files <- utils::unzip(z, list = TRUE)$Name
+    expect_true("favorites_thinkcell_tables.xlsx" %in% files)
+  })
+})
+
+test_that("export_history_snapshot_spec builds a spec from an entry's frozen snapshot without minting a new id", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", figure_title = "Revenue chart",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir,
+      favorite_download_id = "favdl_x"
+    )
+    entry$id <- export_history_new_id()
+
+    spec <- export_history_snapshot_spec(entry, templates_dir = templates_dir)
+    expect_equal(spec$download_id, entry$id)
+    expect_equal(spec$favorite_download_id, "favdl_x")
+    expect_equal(spec$figure_title, "Revenue chart")
+    expect_true(grepl(paste0("download_id=", entry$id), spec$datasheet_log, fixed = TRUE))
+  })
+})
+
+test_that("export_history_download_many with one entry is identical to export_history_redownload", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir
+    )
+    entry$id <- export_history_new_id()
+
+    z <- tempfile(fileext = ".zip")
+    export_history_download_many(list(entry), z, templates_dir = templates_dir, ppttc_exe = NA)
+
+    # No new history entries are logged by a redownload.
+    expect_length(export_history_list(), 0)
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
+    expect_true(grepl(paste0("download_id=", entry$id), ppttc, fixed = TRUE))
+  })
+})
+
+test_that("export_history_download_many with 2+ entries combines them into one deck and logs nothing new", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    e1 <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Revenue", filename_prefix = "revenue_chart",
+      templates_dir = templates_dir
+    )
+    e1$id <- export_history_new_id()
+    e2 <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Cost", filename_prefix = "cost_chart",
+      templates_dir = templates_dir
+    )
+    e2$id <- export_history_new_id()
+
+    z <- tempfile(fileext = ".zip")
+    export_history_download_many(list(e1, e2), z, templates_dir = templates_dir, ppttc_exe = NA)
+
+    expect_length(export_history_list(), 0)
     files <- utils::unzip(z, list = TRUE)$Name
     expect_true("favorites_thinkcell_tables.xlsx" %in% files)
   })
