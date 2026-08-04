@@ -55,7 +55,7 @@ favorites_write <- function(entries) {
 
 favorites_new_id <- function() {
   paste0(
-    "fav_", format(Sys.time(), "%Y%m%d%H%M%S"), "_",
+    "fav_", tc_now("%Y%m%d%H%M%S"), "_",
     paste(sample(c(letters, LETTERS, 0:9), 6, replace = TRUE), collapse = "")
   )
 }
@@ -68,7 +68,7 @@ favorites_new_id <- function() {
 #' *download event*, minted fresh every click, same as a solo download's id.
 favorites_download_new_id <- function() {
   paste0(
-    "favdl_", format(Sys.time(), "%Y%m%d%H%M%S"), "_",
+    "favdl_", tc_now("%Y%m%d%H%M%S"), "_",
     paste(sample(c(letters, LETTERS, 0:9), 6, replace = TRUE), collapse = "")
   )
 }
@@ -79,7 +79,7 @@ favorites_download_new_id <- function() {
 favorites_add <- function(entry) {
   entries <- favorites_list()
   entry$id         <- favorites_new_id()
-  entry$created_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  entry$created_at <- tc_now()
   entries[[length(entries) + 1]] <- entry
   favorites_write(entries)
   invisible(entry$id)
@@ -463,7 +463,7 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
   # One shared timestamp for every entry logged from this click, rather than
   # each one's independently-generated (near-identical but not exact) time --
   # see export_history_add()'s created_at handling.
-  batch_created_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  batch_created_at <- tc_now()
 
   labels <- sanitize_excel_sheet_names(
     vapply(entries, function(e) tc_or(e$label, "favorite"), character(1))

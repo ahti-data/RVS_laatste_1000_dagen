@@ -35,7 +35,7 @@ export_history_dir <- function() {
 
 export_history_new_id <- function() {
   paste0(
-    "exp_", format(Sys.time(), "%Y%m%d%H%M%S"), "_",
+    "exp_", tc_now("%Y%m%d%H%M%S"), "_",
     paste(sample(c(letters, LETTERS, 0:9), 6, replace = TRUE), collapse = "")
   )
 }
@@ -54,7 +54,7 @@ export_history_add <- function(entry) {
     entry$id <- export_history_new_id()
   }
   if (is.null(entry$created_at) || !nzchar(entry$created_at)) {
-    entry$created_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+    entry$created_at <- tc_now()
   }
   dir <- export_history_dir()
   dir.create(dir, recursive = TRUE, showWarnings = FALSE)
@@ -428,7 +428,7 @@ export_history_regenerate_many <- function(entries, zip_path, session, templates
   }
 
   new_favorite_download_id <- favorites_download_new_id()
-  batch_created_at <- format(Sys.time(), "%Y-%m-%d %H:%M:%S")
+  batch_created_at <- tc_now()
   prepared <- lapply(entries, function(e) {
     export_history_prepare_regenerate_spec(
       e, session, favorite_download_id = new_favorite_download_id,

@@ -26,6 +26,17 @@
 # depend on, nor collide with, the app-level `%||%`.
 tc_or <- function(x, y) if (is.null(x) || length(x) == 0) y else x
 
+#' Current timestamp string in the dashboard's local timezone, regardless of
+#' the server process's own system timezone (commonly UTC on a deployed
+#' server, which would otherwise stamp every log/history/favorite timestamp
+#' a couple hours off from Dutch wall-clock time). Every stamped or logged
+#' timestamp anywhere in the app should go through this rather than a bare
+#' `Sys.time()`/`format(Sys.time())`.
+#' @param fmt strftime format string.
+tc_now <- function(fmt = "%Y-%m-%d %H:%M:%S") {
+  format(Sys.time(), fmt, tz = "Europe/Amsterdam")
+}
+
 # ---------------------------------------------------------------------------
 # Session-scoped chart registry: lets Export History "regenerate" a chart
 # against *today's* live data, not just replay a frozen snapshot.
@@ -792,7 +803,7 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
                                    chart_type, selections, chart_id = NULL,
                                    favorite_download_id = NULL,
                                    source_output = NULL, source_sheet = NULL) {
-  parts <- c(sprintf("timestamp=%s", format(Sys.time(), "%Y-%m-%d %H:%M:%S")))
+  parts <- c(sprintf("timestamp=%s", tc_now()))
   if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
     parts <- c(parts, sprintf("download_id=%s", chart_id))
   }
