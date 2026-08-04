@@ -1988,7 +1988,8 @@ ui <- navbarPage(
                    chart_type = "grouped_bar",
                    raw_label = "Gegevens downloaden",
                    thinkcell_label = "Download voor Think-cell",
-                   plot_output_id = "plot_zorg_totaal"
+                   plot_output_id = "plot_zorg_totaal",
+                   default_slide_order = "val_asc"
                  )
                ),
                mainPanel(
