@@ -3362,6 +3362,20 @@ server <- function(input, output, session) {
     }
   )
 
+  it3_zpk_title <- reactive({
+    metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
+    title_parts <- c(
+      "Iteratie 3 | ZPK categorieën tellingen",
+      paste0("died: ", input$it3_zpk_died %||% "-"),
+      paste0("cohort: ", input$it3_zpk_cohort %||% "-"),
+      paste0("setting: ", pretty_vektmszsettingzpk(input$it3_zpk_setting %||% "-")),
+      paste0("bin: ", input$it3_zpk_bin %||% "-"),
+      paste0("prestatietype: ", input$it3_zpk_prestatie_type %||% "-"),
+      paste0("variabele: ", pretty_it3_zpk_metric(metric))
+    )
+    paste(title_parts, collapse = " | ")
+  })
+
   output$it3_plot_zpk <- renderPlotly({
     metric <- input$it3_zpk_metric %||% "n_totaal_gebruikers"
 
@@ -3398,16 +3412,6 @@ server <- function(input, output, session) {
 
     req(nrow(df) > 0)
 
-    title_parts <- c(
-      "Iteratie 3 | ZPK categorieën tellingen",
-      paste0("died: ", input$it3_zpk_died %||% "-"),
-      paste0("cohort: ", input$it3_zpk_cohort %||% "-"),
-      paste0("setting: ", pretty_vektmszsettingzpk(input$it3_zpk_setting %||% "-")),
-      paste0("bin: ", input$it3_zpk_bin %||% "-"),
-      paste0("prestatietype: ", input$it3_zpk_prestatie_type %||% "-"),
-      paste0("variabele: ", pretty_it3_zpk_metric(metric))
-    )
-
     t_levels <- df |>
       dplyr::distinct(t_label, t_num) |>
       dplyr::arrange(t_num) |>
@@ -3421,7 +3425,7 @@ server <- function(input, output, session) {
       ggplot2::theme_minimal(base_size = 13) +
       ggplot2::theme(legend.position = "bottom", panel.grid.minor = ggplot2::element_blank()) +
       ggplot2::labs(x = "t", y = NULL, fill = "ZPK categorie") +
-      ggplot2::ggtitle(paste(title_parts, collapse = " | "))
+      ggplot2::ggtitle(it3_zpk_title())
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
@@ -3463,7 +3467,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "metric_value",
     filename_prefix = "iteratie3_zpk",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_zpk_title
   )
 
   it3_top50_filtered <- reactive({
@@ -4028,6 +4033,14 @@ server <- function(input, output, session) {
     df
   })
 
+  it3_zvwk_title <- reactive({
+    paste0(
+      "ZVW-kosten verdeling | ",
+      pretty_metric_name(input$it3_zvwk_cost_type %||% "-"), " | cohort ",
+      input$it3_zvwk_cohort %||% "-"
+    )
+  })
+
   output$it3_plot_zvwk <- renderPlotly({
     df <- it3_zvwk_filtered()
     req(nrow(df) > 0, "cost_bin" %in% names(df), "n_population" %in% names(df))
@@ -4075,11 +4088,7 @@ server <- function(input, output, session) {
       ggplot2::labs(
         x = "Kosten (cost_bin)",
         y = "Aantal personen (n_population)",
-        title = paste0(
-          "ZVW-kosten verdeling | ",
-          pretty_metric_name(input$it3_zvwk_cost_type %||% "-"), " | cohort ",
-          input$it3_zvwk_cohort %||% "-"
-        )
+        title = it3_zvwk_title()
       )
 
     if (!is.na(ref_bin) && nzchar(ref_bin)) {
@@ -4108,7 +4117,8 @@ server <- function(input, output, session) {
     series_col = "cost_bin",
     value_col = "pop_num",
     filename_prefix = "iteratie3_zvwk",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_zvwk_title
   )
 
   it3_regression_filtered <- reactive({
@@ -4277,7 +4287,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "n_mensen",
     filename_prefix = "basispopulatie",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = "Basispopulatie"
   )
   
   # ==========================================
@@ -4379,7 +4390,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "waarde",
     filename_prefix = "zorg_totaal",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = "Zorg Totaal"
   )
   
   # ==========================================
@@ -4583,6 +4595,18 @@ server <- function(input, output, session) {
     )
   }, ignoreInit = FALSE)
   
+  iter1_tijd_title <- reactive({
+    selected_domains <- input$mnd_domein
+    if (identical(input$mnd_grafiek, "Lijngrafiek")) {
+      selected_domain <- if (!is.null(selected_domains) && length(selected_domains) > 0) selected_domains[1] else ""
+      paste("Zorg over Tijd (Lijn):", selected_domain)
+    } else if (length(selected_domains) > 1) {
+      paste("Zorg over Tijd:", paste(selected_domains, collapse = ", "))
+    } else {
+      paste("Zorg over Tijd:", selected_domains[1])
+    }
+  })
+
   output$plot_zorg_maandelijks <- plotly::renderPlotly({
     if (input$mnd_grafiek == "Lijngrafiek") {
       df <- lijn_data_maandelijks()
@@ -4628,7 +4652,7 @@ server <- function(input, output, session) {
         geom_point(size = 2) +
         theme_minimal() +
         labs(
-          title = paste("Zorg over Tijd (Lijn):", selected_domain),
+          title = iter1_tijd_title(),
           subtitle = paste0(
             "Maatstaf: ", get_maatstaf_label(input$mnd_maatstaf),
             " | Bin size: ", get_bin_size_label(input$mnd_bin_size),
@@ -4662,7 +4686,7 @@ server <- function(input, output, session) {
           geom_col(position = "stack") +
           theme_minimal() +
           labs(
-            title = paste("Zorg over Tijd:", paste(selected_domains, collapse = ", ")),
+            title = iter1_tijd_title(),
             subtitle = paste0(
               "Maatstaf: ", get_maatstaf_label(input$mnd_maatstaf),
               " | Bin size: ", get_bin_size_label(input$mnd_bin_size),
@@ -4679,7 +4703,7 @@ server <- function(input, output, session) {
           geom_col(position = position_dodge()) +
           theme_minimal() +
           labs(
-            title = paste("Zorg over Tijd:", selected_domains[1]),
+            title = iter1_tijd_title(),
             subtitle = paste0(
               "Maatstaf: ", get_maatstaf_label(input$mnd_maatstaf),
               " | Bin size: ", get_bin_size_label(input$mnd_bin_size),
@@ -4752,7 +4776,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "zorg_over_tijd",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = iter1_tijd_title
   )
   
   # ==========================================
@@ -4823,6 +4848,10 @@ server <- function(input, output, session) {
     })
   })
 
+  iter1_cost_title <- reactive({
+    paste("Kostenboxplot voor", input$cost_var)
+  })
+
   output$plot_cost <- plotly::renderPlotly({
     log_msg("[render] Rendering plot_cost with plotly...")
     tryCatch({
@@ -4844,7 +4873,7 @@ server <- function(input, output, session) {
         geom_point(aes(y = mediaan_per_persoon), position = position_dodge(width = 0.8), size = 2) +
         facet_wrap(~cohort, nrow = 1) +
         labs(
-          title = paste("Kostenboxplot voor", input$cost_var),
+          title = iter1_cost_title(),
           x = "t", y = "Kosten (per persoon)",
           color = "Status", fill = "Status"
         ) +
@@ -4876,7 +4905,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "mediaan_per_persoon",
     filename_prefix = "kosten_boxplot",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = iter1_cost_title
   )
 
   # ==========================================
@@ -4962,6 +4992,10 @@ server <- function(input, output, session) {
     })
   })
   
+  iter1_bfly_title <- reactive({
+    paste("Zorg per Domein:", input$butterfly_domein)
+  })
+
   output$plot_butterfly <- plotly::renderPlotly({
     log_msg("[render] Rendering butterfly chart...")
     tryCatch({
@@ -5007,7 +5041,7 @@ server <- function(input, output, session) {
         geom_vline(xintercept = 0, linetype = "solid", color = "black", size = 1) +
         scale_x_continuous(labels = function(x) abs(x)) +
         labs(
-          title = paste("Zorg per Domein:", input$butterfly_domein),
+          title = iter1_bfly_title(),
           subtitle = paste("Maatstaf:", input$butterfly_maatstaf),
           x = "Waarde (absolute schaal)", y = "Populatie / Doodsoorzaak",
           fill = "Groep"
@@ -5050,7 +5084,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "zorg_butterfly",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = iter1_bfly_title
   )
 
   # ==========================================
@@ -5172,7 +5207,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "waarde",
     filename_prefix = "interventies",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = "Curatieve Interventies"
   )
 
   # ==========================================
@@ -5544,13 +5580,13 @@ server <- function(input, output, session) {
       )
   })
 
-  agg_plot_obj <- reactive({
+  # Shared by agg_plot_obj() (the plot itself) and agg_plot_title() (its
+  # figure_title) so both stay derived from exactly the same rows -- this is
+  # the common df_plot construction that used to live only inside
+  # agg_plot_obj(), extracted so the title doesn't have to duplicate it.
+  agg_df_plot_base <- reactive({
     df <- filtered_agg()
     req(nrow(df) > 0)
-
-    view <- input$agg_view
-    choices <- view_choices_for(agg_raw() |> dplyr::filter(name %in% selected_agg_names()))
-    if (is.null(view) || !view %in% choices) view <- choices[[1]]
 
     split_col <- effective_agg_split()
     has_split <- split_col != "none" && split_col %in% names(df)
@@ -5581,7 +5617,28 @@ server <- function(input, output, session) {
     df_plot <- df_plot |>
       dplyr::filter(!is.na(population_value), !is.na(versie))
     req(nrow(df_plot) > 0)
+    df_plot
+  })
+
+  agg_plot_title <- reactive({
+    df_plot <- agg_df_plot_base()
     y_label <- dplyr::first(df_plot$maat)
+    paste(
+      pretty_sheet(active_agg_sheet()),
+      "|",
+      if (length(selected_agg_names()) <= 2) paste(pretty_metric_name(selected_agg_names(), active_agg_sheet()), collapse = ", ") else "Meerdere uitkomsten",
+      "|",
+      y_label
+    )
+  })
+
+  agg_plot_obj <- reactive({
+    df_plot <- agg_df_plot_base()
+
+    view <- input$agg_view
+    choices <- view_choices_for(agg_raw() |> dplyr::filter(name %in% selected_agg_names()))
+    if (is.null(view) || !view %in% choices) view <- choices[[1]]
+
     multiple_outcomes <- dplyr::n_distinct(df_plot$name) > 1
     multiple_versions <- dplyr::n_distinct(df_plot$versie) > 1
     version_labels_bar <- c("Geobserveerd" = "Niet gecorrigeerd", "Inflatiecorrectie" = "Inflatiecorrectie")
@@ -5757,15 +5814,7 @@ server <- function(input, output, session) {
         panel.grid.minor = ggplot2::element_blank()
       ) +
       {if (view == "maandelijks" && "t" %in% names(df_plot)) ggplot2::guides(fill = "none", color = ggplot2::guide_legend(nrow = if (multiple_versions) 2 else 1, byrow = TRUE), linetype = if (multiple_versions) ggplot2::guide_legend(nrow = 2, byrow = TRUE) else "none") else ggplot2::guides(fill = if (multiple_versions) ggplot2::guide_legend(nrow = 2, byrow = TRUE) else "none", color = "none", alpha = "none")} +
-      ggplot2::ggtitle(
-        paste(
-          pretty_sheet(active_agg_sheet()),
-          "|",
-          if (length(selected_agg_names()) <= 2) paste(pretty_metric_name(selected_agg_names(), active_agg_sheet()), collapse = ", ") else "Meerdere uitkomsten",
-          "|",
-          y_label
-        )
-      )
+      ggplot2::ggtitle(agg_plot_title())
 
     p
   })
@@ -5889,7 +5938,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "rvs_uitkomsten",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = agg_plot_title
   )
 
   heatmap_available_splits <- reactive({
@@ -6064,6 +6114,10 @@ server <- function(input, output, session) {
       dplyr::select(Uitkomst, dplyr::any_of(column_levels))
   })
 
+  heatmap_title <- reactive({
+    paste("Heatmap", pretty_split_name(selected_hm_split()), pretty_stat(selected_hm_stat()), sep = " | ")
+  })
+
   heatmap_plot_obj <- reactive({
     df <- heatmap_data()
     split_col <- selected_hm_split()
@@ -6108,7 +6162,7 @@ server <- function(input, output, session) {
       ) +
       ggplot2::guides(fill = "none") +
       ggplot2::labs(fill = NULL) +
-      ggplot2::ggtitle(paste("Heatmap", pretty_split_name(split_col), pretty_stat(stat), sep = " | "))
+      ggplot2::ggtitle(heatmap_title())
 
     p
   })
@@ -6147,7 +6201,8 @@ server <- function(input, output, session) {
     series_col = "name",
     value_col = "value_num",
     filename_prefix = "rvs_heatmap",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = heatmap_title
   )
 
   observe({
@@ -6635,6 +6690,12 @@ server <- function(input, output, session) {
       )
   })
 
+  top_plot_title <- reactive({
+    df_plot <- top_butterfly_data()
+    req(nrow(df_plot) > 0)
+    paste(pretty_sheet(input$top_sheet), "|", dplyr::first(df_plot$metric_label))
+  })
+
   top_plot_obj <- reactive({
     df_plot <- top_butterfly_data()
     req(nrow(df_plot) > 0)
@@ -6716,7 +6777,7 @@ server <- function(input, output, session) {
       ) +
       ggplot2::guides(fill = "none") +
       ggplot2::labs(x = NULL, y = NULL, fill = NULL) +
-      ggplot2::ggtitle(paste(pretty_sheet(input$top_sheet), "|", metric_label))
+      ggplot2::ggtitle(top_plot_title())
 
     p
   })
@@ -6788,7 +6849,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "rvs_top_codes",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = top_plot_title
   )
 
   favorites_panel_server("favorites")
