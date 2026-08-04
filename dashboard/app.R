@@ -2984,6 +2984,12 @@ server <- function(input, output, session) {
     updateRadioButtons(session, "it3_cost_metric", choices = choices, selected = selected)
   })
 
+  it3_cost_title <- reactive({
+    metric <- input$it3_cost_metric
+    req(!is.null(metric), nzchar(metric), !identical(metric, "__loading__"))
+    paste0("Kosten over tijd — ", it3_cost_metric_label(metric))
+  })
+
   output$it3_plot_cost_agg <- renderPlotly({
     df <- it3_cost_agg_filtered()
     metric <- input$it3_cost_metric
@@ -3156,6 +3162,8 @@ server <- function(input, output, session) {
       }
     }
 
+    p <- p + ggplot2::ggtitle(it3_cost_title())
+
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
   })
@@ -3225,7 +3233,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_cost_agg",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_cost_title
   )
 
   observe({
@@ -3492,12 +3501,19 @@ server <- function(input, output, session) {
     "onbekend"
   })
 
-  output$it3_top50_title <- renderText({
+  it3_top50_header_text <- reactive({
     rb <- input$it3_top50_ranked_by %||% "-"
     group <- input$it3_top50_compare_group %||% "-"
     opposite <- it3_top50_opposite_label()
     paste0("Top 50 ", rb, " compared to ", group, ": ", opposite)
   })
+
+  output$it3_top50_title <- renderText({
+    it3_top50_header_text()
+  })
+
+  it3_top50_title_main <- reactive(paste0(it3_top50_header_text(), " — geselecteerd"))
+  it3_top50_title_cmp  <- reactive(paste0(it3_top50_header_text(), " — vergelijking"))
 
   it3_top50_item_label <- function(df, desc_col, code_col) {
     desc <- if (desc_col %in% names(df)) as.character(df[[desc_col]]) else rep("", nrow(df))
@@ -3603,7 +3619,7 @@ server <- function(input, output, session) {
     out
   }
 
-  it3_top50_render_bar_plot <- function(df_plot, fill_color, hide_y_axis = FALSE) {
+  it3_top50_render_bar_plot <- function(df_plot, fill_color, hide_y_axis = FALSE, title = NULL) {
     p <- ggplot2::ggplot(df_plot, ggplot2::aes(x = label_short, y = value_num, text = tooltip)) +
       ggplot2::geom_col(fill = fill_color) +
       ggplot2::coord_flip() +
@@ -3614,6 +3630,8 @@ server <- function(input, output, session) {
         axis.ticks.y = if (hide_y_axis) ggplot2::element_blank() else ggplot2::element_line()
       ) +
       ggplot2::labs(x = NULL, y = NULL)
+
+    if (!is.null(title) && nzchar(title)) p <- p + ggplot2::ggtitle(title)
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
@@ -3635,7 +3653,7 @@ server <- function(input, output, session) {
       label_levels = label_levels
     )
     req(nrow(df_plot) > 0)
-    it3_top50_render_bar_plot(df_plot, "#2563EB")
+    it3_top50_render_bar_plot(df_plot, "#2563EB", title = it3_top50_title_main())
   })
 
   output$it3_plot_top50_compare <- renderPlotly({
@@ -3660,7 +3678,7 @@ server <- function(input, output, session) {
       label_levels = label_levels
     )
     req(nrow(df_plot) > 0)
-    it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE)
+    it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE, title = it3_top50_title_cmp())
   })
 
   it3_top50_main_export <- reactive({
@@ -3716,7 +3734,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_main",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_top50_title_main
   )
 
   chart_data_downloads_server(
@@ -3727,7 +3746,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_compare",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_top50_title_cmp
   )
 
   it3_top50_prest_filtered <- reactive({
@@ -3745,12 +3765,19 @@ server <- function(input, output, session) {
     )
   })
 
-  output$it3_top50_prest_title <- renderText({
+  it3_top50_prest_header_text <- reactive({
     rb <- input$it3_top50_prest_ranked_by %||% "-"
     group <- input$it3_top50_prest_compare_group %||% "-"
     opposite <- it3_top50_opposite_label_for(rb, group)
     paste0("Top 50 ", rb, " compared to ", group, ": ", opposite)
   })
+
+  output$it3_top50_prest_title <- renderText({
+    it3_top50_prest_header_text()
+  })
+
+  it3_prest_title_main <- reactive(paste0(it3_top50_prest_header_text(), " — geselecteerd"))
+  it3_prest_title_cmp  <- reactive(paste0(it3_top50_prest_header_text(), " — vergelijking"))
 
   output$it3_plot_top50_prest_main <- renderPlotly({
     df <- it3_top50_prest_filtered()
@@ -3772,7 +3799,7 @@ server <- function(input, output, session) {
       include_median = TRUE
     )
     req(nrow(df_plot) > 0)
-    it3_top50_render_bar_plot(df_plot, "#2563EB")
+    it3_top50_render_bar_plot(df_plot, "#2563EB", title = it3_prest_title_main())
   })
 
   output$it3_plot_top50_prest_compare <- renderPlotly({
@@ -3801,7 +3828,7 @@ server <- function(input, output, session) {
       include_median = TRUE
     )
     req(nrow(df_plot) > 0)
-    it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE)
+    it3_top50_render_bar_plot(df_plot, "#10B981", hide_y_axis = TRUE, title = it3_prest_title_cmp())
   })
 
   it3_top50_prest_main_export <- reactive({
@@ -3869,7 +3896,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_prest_main",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_prest_title_main
   )
 
   chart_data_downloads_server(
@@ -3880,7 +3908,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_prest_compare",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_prest_title_cmp
   )
 
   it3_acp_pop_filtered <- reactive({
@@ -3916,6 +3945,12 @@ server <- function(input, output, session) {
       )
   }, striped = TRUE, hover = TRUE, bordered = TRUE)
 
+  it3_acp_title <- reactive({
+    split_sel <- input$it3_acp_split_by
+    req(!is.null(split_sel), nzchar(split_sel))
+    paste0("ACP populatie descriptives — per ", pretty_split_name(split_sel))
+  })
+
   output$it3_plot_acp_pop <- renderPlotly({
     df <- it3_acp_pop_filtered()
     req(nrow(df) > 0)
@@ -3950,7 +3985,8 @@ server <- function(input, output, session) {
         panel.grid.minor = ggplot2::element_blank(),
         axis.text.x = ggplot2::element_text(angle = 35, hjust = 1)
       ) +
-      ggplot2::labs(x = NULL, y = "Aantal gebruikers", fill = NULL)
+      ggplot2::labs(x = NULL, y = "Aantal gebruikers", fill = NULL) +
+      ggplot2::ggtitle(it3_acp_title())
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::config(displayModeBar = FALSE, displaylogo = FALSE)
@@ -3975,7 +4011,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_acp_descriptives",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_acp_title
   )
 
   it3_zvwk_filtered <- reactive({
@@ -4088,9 +4125,13 @@ server <- function(input, output, session) {
     df |> dplyr::filter(as.character(dependent_var) == as.character(dep))
   })
 
-  output$it3_reg_title <- renderText({
+  it3_reg_title <- reactive({
     dep <- input$it3_reg_dependent_var %||% "-"
     paste0("Regressiecoëfficiënten voor ", dep)
+  })
+
+  output$it3_reg_title <- renderText({
+    it3_reg_title()
   })
 
   output$it3_reg_plot_ui <- renderUI({
@@ -4155,6 +4196,7 @@ server <- function(input, output, session) {
 
     plotly::ggplotly(p, tooltip = "text") |>
       plotly::layout(
+        title = it3_reg_title(),
         margin = list(l = 220),
         hovermode = "closest",
         showlegend = TRUE
@@ -4181,7 +4223,8 @@ server <- function(input, output, session) {
     series_col = "series",
     value_col = "export_value",
     filename_prefix = "iteratie3_regressie",
-    agg_fun = NULL
+    agg_fun = NULL,
+    figure_title = it3_reg_title
   )
 
   # ==========================================
