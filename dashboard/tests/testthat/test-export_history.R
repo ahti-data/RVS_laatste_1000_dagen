@@ -185,6 +185,36 @@ test_that("tc_history_entry_subtitle joins non-empty breadcrumb parts", {
   expect_equal(tc_history_entry_subtitle(list()), "")
 })
 
+test_that("export_history_group_rows groups entries sharing a favorite_download_id into one row", {
+  entries <- list(
+    list(id = "exp_1", created_at = "2026-08-01 09:00:00", favorite_download_id = "favdl_a"),
+    list(id = "exp_2", created_at = "2026-08-01 09:00:01", favorite_download_id = "favdl_a"),
+    list(id = "exp_3", created_at = "2026-08-02 10:00:00", favorite_download_id = NULL),
+    list(id = "exp_4", created_at = "2026-08-03 11:00:00", favorite_download_id = "favdl_b")
+  )
+  rows <- export_history_group_rows(entries)
+
+  expect_length(rows, 3)  # one group of 2 ("favdl_a"), one solo, one group of 1 ("favdl_b")
+  kinds <- vapply(rows, function(r) r$kind, character(1))
+  expect_equal(sum(kinds == "group"), 2)
+  expect_equal(sum(kinds == "solo"), 1)
+
+  group_a <- Find(function(r) identical(r$kind, "group") && identical(r$favorite_download_id, "favdl_a"), rows)
+  expect_length(group_a$members, 2)
+  # This is the exact regression this test guards: a naive which.max() on a
+  # character vector of timestamps silently coerces to NA and errors on the
+  # resulting empty index (this crashed the real Export History tab in
+  # production once it had a genuine multi-member group).
+  expect_equal(group_a$created_at, "2026-08-01 09:00:01")
+
+  # Most-recent-first ordering, group and solo rows interleaved correctly.
+  expect_equal(rows[[1]]$favorite_download_id, "favdl_b")
+})
+
+test_that("export_history_group_rows handles an empty entry list", {
+  expect_equal(export_history_group_rows(list()), list())
+})
+
 # ---- Regenerate -------------------------------------------------------------
 # A plain list(userData = new.env()) stands in for a Shiny session here --
 # tc_chart_registry()/*_register()/*_get() only ever touch session$userData,

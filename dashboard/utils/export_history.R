@@ -443,6 +443,41 @@ export_history_panel_ui <- function(id) {
   )
 }
 
+#' Group history entries sharing one `favorite_download_id` into a single
+#' row (kind `"group"`); every other entry stays its own row (kind
+#' `"solo"`). Sorted by recency, a group's timestamp being its most-recent
+#' member's, so bulk and solo rows interleave correctly in time order.
+#' @param entries List of history entries (e.g. from `filtered_entries()`).
+#' @return List of `list(kind = "solo", entry, created_at)` or
+#'   `list(kind = "group", favorite_download_id, members, created_at)`,
+#'   most-recent first.
+export_history_group_rows <- function(entries) {
+  has_group <- vapply(entries, function(e) nzchar(tc_or(e$favorite_download_id, "")), logical(1))
+
+  solo_rows <- lapply(entries[!has_group], function(e) {
+    list(kind = "solo", entry = e, created_at = tc_or(e$created_at, ""))
+  })
+
+  bulk_ids <- unique(vapply(entries[has_group], function(e) e$favorite_download_id, character(1)))
+  group_rows <- lapply(bulk_ids, function(gid) {
+    members <- Filter(function(e) identical(tc_or(e$favorite_download_id, ""), gid), entries)
+    created_ats <- vapply(members, function(e) tc_or(e$created_at, ""), character(1))
+    list(
+      kind = "group",
+      favorite_download_id = gid,
+      members = members,
+      # "%Y-%m-%d %H:%M:%S" strings sort correctly lexicographically, so
+      # plain max() gives the most recent one -- which.max() would silently
+      # coerce to numeric (NA, with a warning) and error on the resulting
+      # empty index.
+      created_at = max(created_ats)
+    )
+  })
+
+  rows <- c(solo_rows, group_rows)
+  rows[order(vapply(rows, function(r) r$created_at, character(1)), decreasing = TRUE)]
+}
+
 #' Server logic for the shared "Export history" tab.
 #'
 #' Uses `reactivePoll()` over the history directory (max modification time +
@@ -489,31 +524,9 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
 
     # Groups entries sharing one favorite_download_id into a single
     # expand/collapse row; solo entries (no favorite_download_id) render as
-    # before. Sorted by recency, a group's timestamp being its most-recent
-    # member's, so bulk and solo rows interleave correctly in time order.
-    display_rows <- shiny::reactive({
-      entries <- filtered_entries()
-      has_group <- vapply(entries, function(e) nzchar(tc_or(e$favorite_download_id, "")), logical(1))
-
-      solo_rows <- lapply(entries[!has_group], function(e) {
-        list(kind = "solo", entry = e, created_at = tc_or(e$created_at, ""))
-      })
-
-      bulk_ids <- unique(vapply(entries[has_group], function(e) e$favorite_download_id, character(1)))
-      group_rows <- lapply(bulk_ids, function(gid) {
-        members <- Filter(function(e) identical(tc_or(e$favorite_download_id, ""), gid), entries)
-        created_ats <- vapply(members, function(e) tc_or(e$created_at, ""), character(1))
-        list(
-          kind = "group",
-          favorite_download_id = gid,
-          members = members,
-          created_at = created_ats[[which.max(created_ats)]]
-        )
-      })
-
-      rows <- c(solo_rows, group_rows)
-      rows[order(vapply(rows, function(r) r$created_at, character(1)), decreasing = TRUE)]
-    })
+    # before. See export_history_group_rows() for the (pure, unit-tested)
+    # grouping/ordering itself.
+    display_rows <- shiny::reactive(export_history_group_rows(filtered_entries()))
 
     entry_row_ui <- function(e, indent = FALSE) {
       shiny::tags$div(
