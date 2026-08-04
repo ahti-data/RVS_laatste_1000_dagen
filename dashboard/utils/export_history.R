@@ -10,7 +10,10 @@
 #' spotted in a real PowerPoint deck can be traced back here.
 #'
 #' Two ways to get a chart back, both available per-row and (via the
-#' checkboxes + bottom banner) across an arbitrary multi-row selection:
+#' checkboxes + bottom banner) across an arbitrary multi-chart selection --
+#' including picking out specific charts within a bulk download rather than
+#' only the whole group, since every member has its own checkbox alongside
+#' the group's own "select every member" one:
 #'   * "Redownload" -- always an exact-snapshot replay, instant, no lookup
 #'     needed. Selecting several rows combines them into one deck instead of
 #'     one zip per click.
@@ -556,29 +559,30 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
     # grouping/ordering itself.
     display_rows <- shiny::reactive(export_history_group_rows(filtered_entries()))
 
-    # Selection state for the checkbox-driven bottom banner. A row's checkbox
-    # id is its entry `id` for a solo row or its `favorite_download_id` for a
-    # group row -- a group is selected/acted on as one unit, consistent with
-    # how it already regenerates as one unit. Stored in `selected`
-    # (reactiveValues) rather than read directly from `input[[...]]`, because
-    # a freshly-rendered checkboxInput (renderUI can re-run on any poll tick,
-    # e.g. someone else logs a new export while rows are checked) resets to
-    # its `value=` argument -- each row is rendered with
-    # `value = isTRUE(selected[[row_id]])` so it survives that.
+    # Selection state for the checkbox-driven bottom banner. Every individual
+    # entry (solo or a bulk group's member) has its own checkbox, keyed by its
+    # own `id` -- a bulk group's checkbox is a separate "select all members in
+    # this group" toggle (see group_row_ui()), not a selection unit of its
+    # own, so a specific chart within a bulk download can be picked out on its
+    # own or the whole group can be selected in one click. Stored in
+    # `selected` (reactiveValues) rather than read directly from
+    # `input[[...]]`, because a freshly-rendered checkboxInput (renderUI can
+    # re-run on any poll tick, e.g. someone else logs a new export while rows
+    # are checked) resets to its `value=` argument -- each row is rendered
+    # with `value = isTRUE(selected[[e$id]])` so it survives that.
     selected <- shiny::reactiveValues()
     registered_checkboxes <- new.env()
 
     entry_row_ui <- function(e, indent = FALSE) {
-      row_id <- e$id
       shiny::tags$div(
         style = paste(
           "display:flex; justify-content:space-between; align-items:flex-start;",
           "gap:12px; padding:8px 0; border-bottom:1px solid #eee;",
-          if (indent) "margin-left:24px;" else ""
+          if (indent) "margin-left:44px; padding-left:12px; border-left:2px solid #E5E7EB;" else ""
         ),
         shiny::tags$div(
           style = "display:flex; gap:8px; align-items:flex-start;",
-          if (!indent) shiny::checkboxInput(session$ns(paste0("sel_", row_id)), NULL, value = isTRUE(selected[[row_id]])),
+          shiny::checkboxInput(session$ns(paste0("sel_", e$id)), NULL, value = isTRUE(selected[[e$id]])),
           shiny::tags$div(
             shiny::tags$strong(tc_or(e$label, "(untitled)")),
             shiny::tags$code(style = "font-size:11px; margin-left:8px; color:#6B7280;", tc_or(e$id, "")),
@@ -593,7 +597,15 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
             if (nzchar(tc_or(e$created_at, ""))) shiny::tags$div(
               style = "font-size:11px; color:#9CA3AF;",
               paste0("Downloaded: ", e$created_at)
-            )
+            ),
+            {
+              options_line <- favorites_selections_inline(e$selections)
+              if (nzchar(options_line)) shiny::tags$div(
+                style = "font-size:11px; color:#6B7280; margin-top:2px;",
+                shiny::tags$span(style = "color:#9CA3AF;", "Options: "),
+                options_line
+              )
+            }
           )
         ),
         shiny::tags$div(
@@ -612,14 +624,19 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
 
     group_row_ui <- function(g) {
       is_open <- isTRUE(expanded[[g$favorite_download_id]])
-      row_id <- g$favorite_download_id
+      # This checkbox isn't its own selection -- it's a "select every member
+      # of this group" convenience, reflecting (and driving) the members' own
+      # checkboxes below rather than a unit of its own, so a specific chart
+      # within a bulk download can still be picked out on its own.
+      all_selected <- length(g$members) > 0 &&
+        all(vapply(g$members, function(m) isTRUE(selected[[m$id]]), logical(1)))
       shiny::tags$div(
         style = "padding:8px 0; border-bottom:1px solid #eee;",
         shiny::tags$div(
           style = "display:flex; justify-content:space-between; align-items:center; gap:12px;",
           shiny::tags$div(
             style = "display:flex; gap:8px; align-items:center;",
-            shiny::checkboxInput(session$ns(paste0("sel_", row_id)), NULL, value = isTRUE(selected[[row_id]])),
+            shiny::checkboxInput(session$ns(paste0("sel_group_", g$favorite_download_id)), NULL, value = all_selected),
             shiny::actionLink(
               session$ns(paste0("toggle_", g$favorite_download_id)),
               label = sprintf("%s \U0001F4E6 Bulk download — %d charts",
@@ -666,25 +683,11 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       do.call(shiny::tagList, c(list(cap_note), row_uis))
     })
 
-    # Map every currently-displayed, individually-selectable row id (a solo
-    # entry's own id, or a group's favorite_download_id) to its flattened
-    # entry list -- a checked group expands to all its members.
-    row_id_index <- shiny::reactive({
-      idx <- list()
-      for (r in display_rows()) {
-        if (identical(r$kind, "group")) {
-          idx[[r$favorite_download_id]] <- r$members
-        } else {
-          idx[[r$entry$id]] <- list(r$entry)
-        }
-      }
-      idx
-    })
-
+    # Every individual entry (solo or a bulk group's member) is its own
+    # selection unit, so the whole selection is just whichever currently-
+    # displayed entries have their own checkbox checked.
     selected_entries <- shiny::reactive({
-      idx <- row_id_index()
-      ids <- Filter(function(rid) isTRUE(selected[[rid]]), names(idx))
-      unlist(idx[ids], recursive = FALSE)
+      Filter(function(e) isTRUE(selected[[e$id]]), filtered_entries())
     })
 
     # (Re)register one redownload + one regenerate download handler per
@@ -731,12 +734,13 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       })
     })
 
-    # Expand/collapse state for bulk groups, and a lazily-registered toggle
-    # observer per group id -- registered exactly once per id ever seen
-    # (favorite_download_id is stable/permanent), unlike the redownload
-    # handlers above: an observeEvent (unlike a downloadHandler assignment)
-    # isn't idempotent, so re-registering on every poll tick would stack
-    # duplicate handlers and make toggling flip-flop incorrectly over time.
+    # Expand/collapse state for bulk groups, and a lazily-registered toggle +
+    # "select all members" observer per group id -- registered exactly once
+    # per id ever seen (favorite_download_id is stable/permanent), unlike the
+    # redownload handlers above: an observeEvent (unlike a downloadHandler
+    # assignment) isn't idempotent, so re-registering on every poll tick
+    # would stack duplicate handlers and make toggling/selecting flip-flop
+    # incorrectly over time.
     expanded <- shiny::reactiveValues()
     registered_toggles <- new.env()
     shiny::observe({
@@ -749,15 +753,26 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
         shiny::observeEvent(input[[btn_id]], {
           expanded[[gid]] <- !isTRUE(expanded[[gid]])
         }, ignoreInit = TRUE)
+
+        group_id <- gid
+        group_input_id <- paste0("sel_group_", group_id)
+        shiny::observeEvent(input[[group_input_id]], {
+          new_val <- isTRUE(input[[group_input_id]])
+          members <- Filter(function(e) identical(tc_or(e$favorite_download_id, ""), group_id), entries_reactive())
+          for (m in members) {
+            selected[[m$id]] <- new_val
+            shiny::updateCheckboxInput(session, paste0("sel_", m$id), value = new_val)
+          }
+        }, ignoreInit = TRUE, ignoreNULL = FALSE)
       })
     })
 
-    # Same lazy-registration pattern as the toggles above, but for each row's
-    # checkbox -- an observeEvent isn't idempotent, so this must only ever
-    # register once per row id.
+    # Same lazy-registration pattern as the toggles above, but for each
+    # entry's own checkbox -- an observeEvent isn't idempotent, so this must
+    # only ever register once per entry id.
     shiny::observe({
-      row_ids <- names(row_id_index())
-      new_ids <- Filter(function(rid) !exists(rid, envir = registered_checkboxes, inherits = FALSE), row_ids)
+      ids <- vapply(entries_reactive(), function(e) e$id, character(1))
+      new_ids <- Filter(function(rid) !exists(rid, envir = registered_checkboxes, inherits = FALSE), ids)
       lapply(new_ids, function(rid) {
         assign(rid, TRUE, envir = registered_checkboxes)
         input_id <- paste0("sel_", rid)
@@ -771,6 +786,9 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       for (rid in ls(registered_checkboxes)) {
         selected[[rid]] <- FALSE
         shiny::updateCheckboxInput(session, paste0("sel_", rid), value = FALSE)
+      }
+      for (gid in ls(registered_toggles)) {
+        shiny::updateCheckboxInput(session, paste0("sel_group_", gid), value = FALSE)
       }
     })
 
