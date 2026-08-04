@@ -232,3 +232,38 @@ test_that("explicit category_order still overrides factor levels", {
 
   expect_equal(colnames(result)[-1], c("Q2", "Q1"))
 })
+
+test_that("sanitize_excel_sheet_name strips every character Excel forbids in a sheet name", {
+  # Regression test: the original regex ("[\\\\/:?*\\[\\]]") parsed to a
+  # character class that matched nothing at all -- not even a literal
+  # backslash -- so a real chart title containing a colon (e.g. "Zorg per
+  # Domein: bedragwlzzin", a real figure_title) reached writexl unsanitized
+  # and crashed "Download all favorites" in production with "Worksheet name
+  # cannot contain invalid characters".
+  expect_equal(sanitize_excel_sheet_name("a\\b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("a/b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("a:b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("a?b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("a*b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("a[b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("a]b"), "a_b")
+  expect_equal(sanitize_excel_sheet_name("Zorg per Domein: bedragwlzzin"), "Zorg per Domein_ bedragwlzzin")
+  expect_equal(sanitize_excel_sheet_name("Plain Title"), "Plain Title")
+})
+
+test_that("sanitize_excel_sheet_name truncates to 31 characters and never returns an empty name", {
+  long_name <- paste(rep("x", 40), collapse = "")
+  expect_equal(nchar(sanitize_excel_sheet_name(long_name)), 31)
+  expect_equal(sanitize_excel_sheet_name(""), "sheet")
+  # Disallowed characters are substituted with "_", not stripped -- ":::"
+  # becomes "___", still non-empty, so this only exercises the truly-empty
+  # fallback via "".
+  expect_equal(sanitize_excel_sheet_name(":::"), "___")
+})
+
+test_that("sanitize_excel_sheet_names de-duplicates sheet names that collide after sanitizing", {
+  result <- sanitize_excel_sheet_names(c("Zorg: A", "Zorg: A", "Other"))
+  expect_equal(result[[3]], "Other")
+  expect_equal(length(unique(result)), 3)
+  expect_true(all(nchar(result) <= 31))
+})

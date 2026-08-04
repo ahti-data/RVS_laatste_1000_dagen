@@ -221,7 +221,7 @@ tc_facet_levels <- function(facet_values) {
 
 sanitize_excel_sheet_name <- function(name) {
   name <- as.character(name)
-  name <- gsub("[\\\\/:?*\\[\\]]", "_", name)
+  name <- gsub("[]\\/:*?[]", "_", name)
   name <- substr(name, 1, 31)
   if (!nzchar(name)) {
     return("sheet")
