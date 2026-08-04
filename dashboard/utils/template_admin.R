@@ -287,14 +287,14 @@ template_admin_server <- function(id, templates_dir = NULL) {
           shiny::tags$img(
             src = preview_uri,
             style = paste(
-              "width:120px; height:80px; object-fit:contain; background:#fff;",
+              "width:160px; height:90px; object-fit:contain; background:#fff;",
               "border:1px solid #E4E7EE; border-radius:4px;"
             )
           )
         } else {
           shiny::tags$div(
             style = paste(
-              "width:120px; height:80px; display:flex; align-items:center;",
+              "width:160px; height:90px; display:flex; align-items:center;",
               "justify-content:center; background:#F7F8FA; border:1px dashed #D1D5DB;",
               "border-radius:4px; font-size:11px; color:#9CA3AF; text-align:center;"
             ),

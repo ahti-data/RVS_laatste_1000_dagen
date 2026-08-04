@@ -102,13 +102,13 @@ TC_TEMPLATE_PICKER_RENDER_JS <- r"(
 {
   option: function(item, escape) {
     var img = item.preview
-      ? '<img src="' + item.preview + '" style="width:64px;height:36px;object-fit:contain;margin-right:8px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:4px;background:#fff;">'
-      : '<span style="display:inline-block;width:64px;margin-right:8px;"></span>';
+      ? '<img src="' + item.preview + '" style="width:140px;height:79px;object-fit:contain;margin-right:8px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:4px;background:#fff;">'
+      : '<span style="display:inline-block;width:140px;margin-right:8px;"></span>';
     return '<div style="display:flex;align-items:center;padding:4px 6px;">' + img + '<span>' + escape(item.label) + '</span></div>';
   },
   item: function(item, escape) {
     var img = item.preview
-      ? '<img src="' + item.preview + '" style="width:28px;height:18px;object-fit:contain;margin-right:6px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:3px;background:#fff;">'
+      ? '<img src="' + item.preview + '" style="width:56px;height:32px;object-fit:contain;margin-right:6px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:3px;background:#fff;">'
       : '';
     return '<div style="display:flex;align-items:center;">' + img + '<span>' + escape(item.label) + '</span></div>';
   }
