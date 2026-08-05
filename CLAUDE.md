@@ -3,6 +3,17 @@
 Shiny dashboard analysing healthcare costs and utilisation in the last 1000 days of life,
 plus the R pipeline that produces its aggregated outputs.
 
+## Origin
+
+`dashboard/utils/` and `dashboard/tests/` were built against `ahti-data/shiny_dashboard_template`
+(checked out as a sibling under the same `Git Repos` parent directory) and the two are kept in
+sync by hand: a fix made here to shared download/export/favorites logic under `dashboard/utils/`
+almost always belongs in the template too (and vice versa), so it's available to every dashboard
+built from that template, not just this one. When changing anything under `dashboard/utils/`,
+check whether the template needs the same change, port it (paths differ slightly, e.g.
+`dashboard/utils/` here vs `utils/` there), and run both repos' test suites before considering the
+work done.
+
 ## Structure
 
 - `dashboard/app.R` — the dashboard UI and server logic; sources the helpers below.
