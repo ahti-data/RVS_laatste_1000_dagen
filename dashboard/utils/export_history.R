@@ -9,11 +9,11 @@
 #' `tc_build_ppttc_slide_block()` in `utils/slide_download.R`), so a chart
 #' spotted in a real PowerPoint deck can be traced back here.
 #'
-#' Two ways to get a chart back, both available per-row and (via the
-#' checkboxes + bottom banner) across an arbitrary multi-chart selection --
-#' including picking out specific charts within a bulk download rather than
-#' only the whole group, since every member has its own checkbox alongside
-#' the group's own "select every member" one:
+#' Three actions, all driven by the checkboxes + bottom banner across an
+#' arbitrary multi-chart selection (including picking out specific charts
+#' within a bulk download rather than only the whole group, since every
+#' member has its own checkbox alongside the group's own "select every
+#' member" one) -- there's no per-row button, only this one action surface:
 #'   * "Redownload" -- always an exact-snapshot replay, instant, no lookup
 #'     needed. Selecting several rows combines them into one deck instead of
 #'     one zip per click.
@@ -25,6 +25,10 @@
 #'     the one it started from. Selecting several rows mints one shared
 #'     `favorite_download_id` across the whole regenerated batch, same as a
 #'     bulk "Download all favorites" click.
+#'   * "Regenerate Excel only" -- same live-or-fallback logic as "Regenerate",
+#'     but skips the slide/pptx entirely and writes just the stamped
+#'     think-cell table (see `export_history_regenerate_excel_many()`). One
+#'     row writes a bare `.xlsx`; several zip one per chart.
 
 #' One JSON file per entry (`state/export_history/<id>.json`) rather than one
 #' growing array, so appending never rewrites the whole log -- same reasoning
@@ -415,8 +419,8 @@ export_history_download_many <- function(entries, zip_path, ppttc_exe = NULL, te
 }
 
 #' Regenerate an arbitrary list of history entries against today's live
-#' dashboard data where possible (the Export History tab's per-row
-#' "Regenerate" button and checkbox-driven "Regenerate selected"). One entry
+#' dashboard data where possible (the Export History tab's checkbox-driven
+#' "Regenerate selected"). One entry
 #' delegates to [export_history_regenerate_entry()] unchanged, writing a
 #' standalone ZIP; two or more mint one shared `favorite_download_id` + one
 #' `batch_created_at` (same as a bulk "Download all favorites" click), call
@@ -613,8 +617,8 @@ export_history_panel_ui <- function(id) {
       "Every “Download slide” click is logged here automatically, so a chart from a ",
       "while back can be redownloaded exactly as it was — no need to keep the original ZIP ",
       "around. Find a chart's id on its rendered slide or in its datasheet's corner cell, ",
-      "or search for it below. Each row also has its own instant Redownload/Regenerate ",
-      "buttons; check one or more rows to act on them together."
+      "or search for it below. Check one or more rows and use the actions that appear ",
+      "at the bottom of the screen."
     ),
     shiny::textInput(
       ns("search"), NULL,
