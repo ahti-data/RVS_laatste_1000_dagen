@@ -65,62 +65,35 @@ if (!window.__tcFavoriteCaptureInit) {
 }
 "
 
-#' Client-side handler that swaps a `selectizeInput`'s full option list --
-#' each carrying its own `value`/`label`/`preview` (a data-URI or `""`) --
-#' used both for the initial render (via `options$options`, see
-#' [tc_template_choice_items()]) and to refresh it later when the template
-#' list changes (a new upload on the Manage Templates tab), since
-#' `updateSelectizeInput()` only ever accepts plain label/value pairs, not
-#' the extra `preview` field a thumbnail-per-option picker needs. Idempotent
-#' registration, same pattern as [TC_FAVORITE_CAPTURE_JS].
-TC_TEMPLATE_PICKER_JS <- r"(
-if (!window.__tcTemplatePickerInit) {
-  window.__tcTemplatePickerInit = true;
-  $(document).on('shiny:connected', function() {
-    Shiny.addCustomMessageHandler('tc_template_picker_refresh', function(msg) {
-      var el = document.getElementById(msg.input_id);
-      if (!el || !el.selectize) return;
-      var sel = el.selectize;
-      var current = sel.getValue();
-      sel.clearOptions();
-      (msg.items || []).forEach(function(it) { sel.addOption(it); });
-      sel.refreshOptions(false);
-      var next = (typeof msg.selected !== 'undefined' && msg.selected !== null) ? msg.selected : current;
-      sel.setValue(next, true);
-    });
+#' Delegated click handler for the "Choose a slide template" modal's
+#' thumbnail grid (see `chart_data_downloads_server()`'s `slide_template_open`
+#' observer) -- replaces the old `selectizeInput`-based picker, whose large
+#' thumbnails made its dropdown awkward to open/scroll reliably. A modal
+#' always reflects the current template list fresh (built at open time, via
+#' [tc_template_choice_items()]), so unlike the old picker there's no
+#' separate refresh-on-upload mechanism to maintain. Idempotent registration,
+#' same pattern as [TC_FAVORITE_CAPTURE_JS].
+TC_TEMPLATE_MODAL_JS <- r"(
+if (!window.__tcTemplateModalInit) {
+  window.__tcTemplateModalInit = true;
+  $(document).on('click', '.tc-template-grid-item', function() {
+    Shiny.setInputValue($(this).data('picker-input-id'), $(this).data('value'), {priority: 'event'});
   });
 }
 )"
 
-#' `render` option for the template `selectizeInput`: shows a thumbnail
-#' (when `item.preview` is set) next to the label, both for each row in the
-#' open dropdown -- large here, since judging a think-cell template by its
-#' shape needs a real look, not a postage stamp -- and for the currently-
-#' selected item once closed (kept small there, so the closed input box
-#' doesn't balloon in height every time something's picked).
-TC_TEMPLATE_PICKER_RENDER_JS <- r"(
-{
-  option: function(item, escape) {
-    var img = item.preview
-      ? '<img src="' + item.preview + '" style="width:420px;height:237px;object-fit:contain;margin-right:14px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:4px;background:#fff;">'
-      : '<span style="display:inline-block;width:420px;margin-right:14px;"></span>';
-    return '<div style="display:flex;align-items:center;padding:10px 12px;">' + img + '<span>' + escape(item.label) + '</span></div>';
-  },
-  item: function(item, escape) {
-    var img = item.preview
-      ? '<img src="' + item.preview + '" style="width:56px;height:32px;object-fit:contain;margin-right:6px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:3px;background:#fff;">'
-      : '';
-    return '<div style="display:flex;align-items:center;">' + img + '<span>' + escape(item.label) + '</span></div>';
-  }
-}
-)"
-
-#' Overrides Selectize's default dropdown clipping so the enlarged template
-#' thumbnails (see [TC_TEMPLATE_PICKER_RENDER_JS]) actually get the room they
-#' need instead of just becoming scroll-clipped at the old, small-row height.
-TC_TEMPLATE_PICKER_CSS <- r"(
-.tc-slide-template .selectize-dropdown-content { max-height: 75vh; }
-.tc-slide-template .selectize-dropdown { width: auto; min-width: 100%; }
+#' Styling for the template-picker modal's thumbnail grid (see
+#' [TC_TEMPLATE_MODAL_JS]) -- a comfortably large, scrollable grid of
+#' clickable cards, each showing a full preview image and its file name, with
+#' a highlighted border on the currently-chosen one.
+TC_TEMPLATE_MODAL_CSS <- r"(
+.tc-template-grid { display:flex; flex-wrap:wrap; gap:12px; max-height:65vh; overflow-y:auto; padding:2px; }
+.tc-template-grid-item { cursor:pointer; border:2px solid #E4E7EE; border-radius:8px; padding:8px; width:220px; text-align:center; }
+.tc-template-grid-item:hover { border-color:#93C5FD; background:#F0F7FF; }
+.tc-template-grid-item-selected { border-color:#2563EB; background:#EFF6FF; }
+.tc-template-grid-item img { width:100%; height:124px; object-fit:contain; background:#fff; border:1px solid #E4E7EE; border-radius:4px; }
+.tc-template-grid-noimg { width:100%; height:124px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; font-size:12px; background:#F9FAFB; border:1px dashed #E4E7EE; border-radius:4px; }
+.tc-template-grid-label { margin-top:6px; font-size:13px; color:#374151; word-break:break-word; }
 )"
 
 #' Client-side PNG snapshot for "Download slide" and Export History's
@@ -242,9 +215,9 @@ if (!window.__tcChartCaptureInit) {
 chart_data_downloads_ui <- function(
     id,
     chart_type,
-    raw_label = "Download data (raw)",
-    thinkcell_label = "Download data (think-cell)",
-    slide_label = "Download slide (PowerPoint)",
+    raw_label = "Download Excel data (raw)",
+    thinkcell_label = "Download Excel data (think-cell formatted)",
+    slide_label = "Download slides",
     favorite_label = "☆ Save as favorite",
     plot_output_id = NULL,
     default_slide_order = "auto"
@@ -298,18 +271,11 @@ chart_data_downloads_ui <- function(
       shiny::div(
         class = "tc-slide-template",
         style = "margin-top:8px;",
-        shiny::selectizeInput(
-          ns("slide_template_choice"),
-          label = "Slide template",
-          choices = NULL,
-          selected = "",
-          options = list(
-            options    = tc_template_choice_items(),
-            valueField = "value",
-            labelField = "label",
-            searchField = "label",
-            render     = I(TC_TEMPLATE_PICKER_RENDER_JS)
-          )
+        shiny::tags$label("Slide template", style = "font-weight:600; display:block; margin-bottom:4px;"),
+        shiny::uiOutput(ns("slide_template_info")),
+        shiny::actionButton(
+          ns("slide_template_open"), "Choose template...",
+          class = "btn-default btn-sm", style = "margin-top:4px;"
         ),
         shiny::selectInput(
           ns("slide_order"),
@@ -324,7 +290,6 @@ chart_data_downloads_ui <- function(
           ),
           selected = default_slide_order
         ),
-        shiny::uiOutput(ns("slide_template_info")),
         shiny::tags$div(
           `data-plot-output-id` = plot_output_id,
           `data-module-id` = id,
@@ -334,9 +299,9 @@ chart_data_downloads_ui <- function(
           shiny::uiOutput(ns("favorite_status"))
         ),
         shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS)),
-        shiny::tags$script(shiny::HTML(TC_TEMPLATE_PICKER_JS)),
+        shiny::tags$script(shiny::HTML(TC_TEMPLATE_MODAL_JS)),
         shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS)),
-        shiny::tags$style(shiny::HTML(TC_TEMPLATE_PICKER_CSS))
+        shiny::tags$style(shiny::HTML(TC_TEMPLATE_MODAL_CSS))
       )
     )
   }
@@ -410,51 +375,60 @@ chart_data_downloads_server <- function(
       x
     }
 
-    # The template that will be used for the slide: the user's manual choice if
-    # set, otherwise the one auto-detected from the displayed figure.
+    # The template that will be used for the slide: the user's manual choice
+    # (picked from the TC_TEMPLATE_MODAL_JS grid, see below) if set, otherwise
+    # the one auto-detected from the displayed figure. A plain reactiveVal,
+    # not an input -- the modal always rebuilds its grid fresh from
+    # tc_template_choice_items() at open time (see slide_template_open
+    # below), so unlike the old selectizeInput-based picker there's no
+    # separate poll-and-refresh mechanism needed for a template uploaded at
+    # runtime (Manage Templates tab) to show up.
+    slide_template_manual <- shiny::reactiveVal("")
+
     slide_effective_override <- function() {
-      ui_choice <- tc_or(input$slide_template_choice, "")
+      ui_choice <- tc_or(slide_template_manual(), "")
       if (nzchar(ui_choice)) ui_choice else resolve_opt(template_override)
     }
 
-    # The "Slide template" dropdown's choices are fixed when the UI is built, so
-    # a template uploaded at runtime (Manage-templates tab) wouldn't show up
-    # without a page reload. Poll the templates dir and refresh the choices when
-    # it changes, preserving the user's current selection.
     slide_ui_present <- if (shiny::is.reactive(chart_type)) TRUE else tc_template_available(chart_type)
     if (slide_ui_present) {
-      template_choices_poll <- shiny::reactivePoll(
-        5000, session,
-        checkFunc = function() {
-          # A directory's own mtime only changes when a file is created or
-          # removed directly inside it -- writing into previews/ (a
-          # subdirectory that already exists) doesn't touch templates/'s own
-          # mtime, so it's watched separately too, or a new/replaced preview
-          # (Manage Templates' "Save preview") would never refresh this
-          # picker's embedded thumbnails for an already-open session.
-          dirs <- c(
-            tc_find_templates_dir(), tc_custom_templates_dir(),
-            tc_builtin_previews_dir(), tc_custom_previews_dir()
-          )
-          paste(vapply(dirs, function(d) {
-            if (!is.null(d) && !is.na(d) && dir.exists(d)) as.character(file.info(d)$mtime) else ""
-          }, character(1)), collapse = "|")
-        },
-        valueFunc = function() tc_template_choices()
-      )
-      shiny::observeEvent(template_choices_poll(), {
-        choices  <- template_choices_poll()
-        current  <- shiny::isolate(input$slide_template_choice)
-        selected <- if (!is.null(current) && current %in% choices) current else ""
-        # updateSelectInput() only takes label/value pairs -- this picker's
-        # per-option preview thumbnail needs the richer item list, so the
-        # refresh goes through a small custom message handler instead (see
-        # TC_TEMPLATE_PICKER_JS in the UI function above).
-        session$sendCustomMessage("tc_template_picker_refresh", list(
-          input_id = session$ns("slide_template_choice"),
-          items    = tc_template_choice_items(),
-          selected = selected
+      shiny::observeEvent(input$slide_template_open, {
+        current <- slide_template_manual()
+        # tc_template_choice_items()'s own first entry (value = "") is
+        # already the "Automatisch (gedetecteerd)" reset option -- no need
+        # to add a second one here.
+        grid_items <- tc_template_choice_items()
+        shiny::showModal(shiny::modalDialog(
+          title = "Choose a slide template",
+          size = "l",
+          easyClose = TRUE,
+          shiny::tags$div(
+            class = "tc-template-grid",
+            lapply(grid_items, function(it) {
+              is_selected <- identical(it$value, current)
+              shiny::tags$div(
+                class = paste(
+                  "tc-template-grid-item",
+                  if (is_selected) "tc-template-grid-item-selected" else ""
+                ),
+                `data-value` = it$value,
+                `data-picker-input-id` = session$ns("slide_template_picked"),
+                if (nzchar(it$preview)) {
+                  shiny::tags$img(src = it$preview)
+                } else {
+                  shiny::tags$div(class = "tc-template-grid-noimg", "No preview")
+                },
+                shiny::tags$div(class = "tc-template-grid-label", it$label)
+              )
+            })
+          ),
+          footer = shiny::modalButton("Cancel")
         ))
+      })
+
+      shiny::observeEvent(input$slide_template_picked, {
+        slide_template_manual(tc_or(input$slide_template_picked, ""))
+        shiny::removeModal()
       }, ignoreInit = TRUE)
     }
 
@@ -497,9 +471,19 @@ chart_data_downloads_server <- function(
       } else {
         NULL
       }
+      preview <- tryCatch(tc_preview_data_uri(info$name), error = function(e) NA_character_)
+      thumb <- if (!is.na(preview)) {
+        shiny::tags$img(
+          src = preview,
+          style = "width:56px;height:32px;object-fit:contain;margin-right:6px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:3px;background:#fff;"
+        )
+      } else {
+        NULL
+      }
       shiny::tags$div(
-        style = "font-size:12px; color:#374151;",
-        label, shiny::tags$strong(info$name), warn
+        style = "font-size:12px; color:#374151; display:flex; align-items:center;",
+        thumb,
+        shiny::tags$span(label, shiny::tags$strong(info$name), warn)
       )
     })
 

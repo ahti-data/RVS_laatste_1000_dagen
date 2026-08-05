@@ -869,8 +869,6 @@ iteration2_panels <- function() {
             chart_data_downloads_ui(
               "iter2_agg_dl",
               chart_type = "line",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "plot_agg"
             ),
             downloadButton("dl_agg_plot", "Grafiek downloaden")
@@ -897,8 +895,6 @@ iteration2_panels <- function() {
             chart_data_downloads_ui(
               "iter2_hm_dl",
               chart_type = "scatter",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "plot_heatmap"
             ),
             downloadButton("dl_heatmap_plot", "Grafiek downloaden")
@@ -937,8 +933,6 @@ iteration2_panels <- function() {
             chart_data_downloads_ui(
               "iter2_top_dl",
               chart_type = "bar",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "plot_top"
             ),
             downloadButton("dl_top_plot", "Grafiek downloaden")
@@ -1955,8 +1949,6 @@ ui <- navbarPage(
                  chart_data_downloads_ui(
                    "iter1_basis_dl",
                    chart_type = "grouped_bar",
-                   raw_label = "Gegevens downloaden",
-                   thinkcell_label = "Download voor Think-cell",
                    plot_output_id = "plot_basispopulatie"
                  )
                ),
@@ -1994,8 +1986,6 @@ ui <- navbarPage(
                  chart_data_downloads_ui(
                    "iter1_totaal_dl",
                    chart_type = "grouped_bar",
-                   raw_label = "Gegevens downloaden",
-                   thinkcell_label = "Download voor Think-cell",
                    plot_output_id = "plot_zorg_totaal",
                    default_slide_order = "val_asc"
                  )
@@ -2043,8 +2033,6 @@ ui <- navbarPage(
                  chart_data_downloads_ui(
                    "iter1_tijd_dl",
                    chart_type = "line",
-                   raw_label = "Gegevens downloaden",
-                   thinkcell_label = "Download voor Think-cell",
                    plot_output_id = "plot_zorg_maandelijks"
                  )
                ),
@@ -2070,8 +2058,6 @@ ui <- navbarPage(
                  chart_data_downloads_ui(
                    "iter1_cost_dl",
                    chart_type = "scatter",
-                   raw_label = "Gegevens downloaden",
-                   thinkcell_label = "Download voor Think-cell",
                    plot_output_id = "plot_cost"
                  )
                ),
@@ -2102,8 +2088,6 @@ ui <- navbarPage(
                  chart_data_downloads_ui(
                    "iter1_bfly_dl",
                    chart_type = "bar",
-                   raw_label = "Gegevens downloaden",
-                   thinkcell_label = "Download voor Think-cell",
                    plot_output_id = "plot_butterfly"
                  )
                ),
@@ -2137,8 +2121,6 @@ ui <- navbarPage(
                  chart_data_downloads_ui(
                    "iter1_int_dl",
                    chart_type = "grouped_bar",
-                   raw_label = "Gegevens downloaden",
-                   thinkcell_label = "Download voor Think-cell",
                    plot_output_id = "plot_interventies"
                  )
                ),
@@ -2204,8 +2186,6 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_zpk_dl",
               chart_type = "stacked_bar",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "it3_plot_zpk"
             )
           )
@@ -2244,15 +2224,11 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_top50_main_dl",
               chart_type = "bar",
-              raw_label = "Gegevens downloaden (hoofd)",
-              thinkcell_label = "Download voor Think-cell (hoofd)",
               plot_output_id = "it3_plot_top50_main"
             ),
             chart_data_downloads_ui(
               "iter3_top50_cmp_dl",
               chart_type = "bar",
-              raw_label = "Gegevens downloaden (vergelijking)",
-              thinkcell_label = "Download voor Think-cell (vergelijking)",
               plot_output_id = "it3_plot_top50_compare"
             )
           )
@@ -2292,15 +2268,11 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_prest_main_dl",
               chart_type = "bar",
-              raw_label = "Gegevens downloaden (hoofd)",
-              thinkcell_label = "Download voor Think-cell (hoofd)",
               plot_output_id = "it3_plot_top50_prest_main"
             ),
             chart_data_downloads_ui(
               "iter3_prest_cmp_dl",
               chart_type = "bar",
-              raw_label = "Gegevens downloaden (vergelijking)",
-              thinkcell_label = "Download voor Think-cell (vergelijking)",
               plot_output_id = "it3_plot_top50_prest_compare"
             )
           )
@@ -2340,8 +2312,6 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_cost_dl",
               chart_type = "line",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "it3_plot_cost_agg"
             )
           )
@@ -2393,8 +2363,6 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_reg_dl",
               chart_type = "bar",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "it3_plot_regression"
             )
           )
@@ -2418,8 +2386,6 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_acp_dl",
               chart_type = "grouped_bar",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "it3_plot_acp_pop"
             )
           )
@@ -2446,8 +2412,6 @@ ui <- navbarPage(
             chart_data_downloads_ui(
               "iter3_zvwk_dl",
               chart_type = "scatter",
-              raw_label = "Gegevens downloaden",
-              thinkcell_label = "Download voor Think-cell",
               plot_output_id = "it3_plot_zvwk"
             )
           )

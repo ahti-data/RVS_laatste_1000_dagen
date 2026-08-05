@@ -707,11 +707,31 @@ tc_history_entry_subtitle <- function(e) {
   breadcrumb
 }
 
+#' Every checkbox in this panel is a selection toggle with an empty label
+#' (`checkboxInput(..., NULL, ...)`), but two Bootstrap/Shiny defaults still
+#' reserve real horizontal space for a label that's never there: Bootstrap
+#' 3's `.checkbox label` keeps 20px of padding-left for text that would
+#' normally follow the checkbox, and Shiny's own `.shiny-input-container`
+#' defaults every input's wrapper to `width: 300px` regardless of how small
+#' the actual control is -- together these read as a large, unwanted left
+#' indent before each row's real content. Scoped to `.tc-row-checkbox` (a
+#' plain wrapper div around each `checkboxInput()` call, see
+#' `entry_row_ui()`/`group_row_ui()`) rather than every
+#' `.shiny-input-container` in the panel, so the search box up top -- which
+#' *does* want its default width -- is untouched.
+TC_EXPORT_HISTORY_CSS <- r"(
+.tc-export-history .tc-row-checkbox .shiny-input-container { width: auto; min-width: 0; margin-bottom: 0; }
+.tc-export-history .checkbox { margin: 0; }
+.tc-export-history .checkbox label { padding-left: 0; min-height: 0; }
+.tc-export-history .checkbox label input[type="checkbox"] { position: static; margin: 0; }
+)"
+
 #' UI for the shared "Export history" tab.
 #' @param id Module id.
 export_history_panel_ui <- function(id) {
   ns <- shiny::NS(id)
-  shiny::tagList(
+  shiny::tags$div(
+    class = "tc-export-history",
     shiny::h3("Export history"),
     shiny::p(
       class = "text-muted",
@@ -728,7 +748,8 @@ export_history_panel_ui <- function(id) {
     shiny::tags$hr(),
     shiny::uiOutput(ns("list")),
     shiny::uiOutput(ns("selection_banner")),
-    shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS))
+    shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS)),
+    shiny::tags$style(shiny::HTML(TC_EXPORT_HISTORY_CSS))
   )
 }
 
@@ -836,11 +857,14 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
         style = paste(
           "display:flex; justify-content:space-between; align-items:flex-start;",
           "gap:12px; padding:8px 0; border-bottom:1px solid #eee;",
-          if (indent) "margin-left:44px; padding-left:12px; border-left:2px solid #E5E7EB;" else ""
+          if (indent) "margin-left:20px; padding-left:10px; border-left:2px solid #E5E7EB;" else ""
         ),
         shiny::tags$div(
           style = "display:flex; gap:8px; align-items:flex-start;",
-          shiny::checkboxInput(session$ns(paste0("sel_", e$id)), NULL, value = isTRUE(selected[[e$id]])),
+          shiny::tags$div(
+            class = "tc-row-checkbox",
+            shiny::checkboxInput(session$ns(paste0("sel_", e$id)), NULL, value = isTRUE(selected[[e$id]]))
+          ),
           shiny::tags$div(
             shiny::tags$strong(tc_or(e$label, "(untitled)")),
             shiny::tags$code(style = "font-size:11px; margin-left:8px; color:#6B7280;", tc_or(e$id, "")),
@@ -850,11 +874,16 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
             ),
             shiny::tags$div(
               style = "font-size:11px; color:#9CA3AF;",
-              paste(Filter(nzchar, c(tc_or(e$chart_type, ""), tc_or(e$template_name, ""))), collapse = " · ")
+              tc_or(e$chart_type, "")
             ),
             if (nzchar(tc_or(e$created_at, ""))) shiny::tags$div(
               style = "font-size:11px; color:#9CA3AF;",
               paste0("Downloaded: ", e$created_at)
+            ),
+            if (nzchar(tc_or(e$template_name, ""))) shiny::tags$div(
+              style = "font-size:11px; color:#6B7280; margin-top:2px;",
+              shiny::tags$span(style = "color:#9CA3AF;", "Template: "),
+              e$template_name
             ),
             {
               options_line <- favorites_selections_inline(e$selections)
@@ -883,7 +912,10 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
           style = "display:flex; justify-content:space-between; align-items:center; gap:12px;",
           shiny::tags$div(
             style = "display:flex; gap:8px; align-items:center;",
-            shiny::checkboxInput(session$ns(paste0("sel_group_", g$favorite_download_id)), NULL, value = all_selected),
+            shiny::tags$div(
+              class = "tc-row-checkbox",
+              shiny::checkboxInput(session$ns(paste0("sel_group_", g$favorite_download_id)), NULL, value = all_selected)
+            ),
             shiny::actionLink(
               session$ns(paste0("toggle_", g$favorite_download_id)),
               label = sprintf("%s \U0001F4E6 Bulk download — %d charts",
