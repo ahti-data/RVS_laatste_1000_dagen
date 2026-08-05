@@ -37,6 +37,17 @@ tc_now <- function(fmt = "%Y-%m-%d %H:%M:%S") {
   format(Sys.time(), fmt, tz = "Europe/Amsterdam")
 }
 
+#' Format a source data file's last-modified time for the `source_updated=`
+#' field in [tc_build_datasheet_log()] -- same format/timezone as [tc_now()],
+#' so the two are directly comparable on a datasheet's corner cell.
+#' @param path Path to the source file (e.g. one resolved via
+#'   `resolve_existing_path()`/`resolve_iteration3_subfile()` in `app.R`).
+#' @return Formatted string, or `""` if `path` is `NA`/empty/doesn't exist.
+tc_format_source_mtime <- function(path, fmt = "%Y-%m-%d %H:%M:%S") {
+  if (is.null(path) || is.na(path) || !nzchar(path) || !file.exists(path)) return("")
+  format(file.info(path)$mtime, fmt, tz = "Europe/Amsterdam")
+}
+
 # ---------------------------------------------------------------------------
 # Session-scoped chart registry: lets Export History "regenerate" a chart
 # against *today's* live data, not just replay a frozen snapshot.
@@ -614,6 +625,28 @@ tc_reorder_by_categories <- function(m, ordered_categories) {
   if (is_tc_workbook_list(m)) lapply(m, reorder_one) else reorder_one(m)
 }
 
+#' Resolve the ordered slide/table category axis for a chart: the caller's
+#' pre-oriented `slide_matrix` when supplied (already reflecting the
+#' displayed plot type), otherwise one derived from `tc_data`'s own
+#' orientation for `chart_type` (see [tc_slide_orientation()]) -- either way,
+#' with `slide_order` applied via [tc_order_slide_matrix()]. Shared by
+#' [tc_build_slide_zip()] (for both its pptx chart and companion table.xlsx)
+#' and any lighter-weight path that only needs the table (e.g. an
+#' Excel-only regenerate), so both agree on category order without
+#' duplicating the orientation+ordering pipeline. Non-faceted only -- a
+#' faceted `tc_data` is a named list of matrices, not one matrix; callers
+#' with a faceted chart pass a single facet's matrix in, same as
+#' [tc_build_slide_zip()]'s own faceted handling.
+#' @return The ordered slide matrix (data frame).
+tc_resolve_slide_matrix <- function(tc_data, chart_type, slide_matrix, slide_order) {
+  m <- if (!is.null(slide_matrix)) {
+    as.data.frame(slide_matrix, stringsAsFactors = FALSE, check.names = FALSE)
+  } else {
+    tc_slide_orientation(tc_data, chart_type)
+  }
+  tc_order_slide_matrix(m, slide_order)
+}
+
 #' Windows-safe path for embedding in the .ppttc `template` field.
 #'
 #' think-cell's `ppttc` can fail to load templates whose path contains spaces or
@@ -835,12 +868,18 @@ tc_selection_kv_pairs <- function(selections) {
 #'   dashboard whose data is assembled from named external outputs. Included
 #'   as `output=`/`sheet=` fields when supplied; omit both for dashboards
 #'   with no such concept (the default, and this template's own scaffold).
+#' @param source_mtime Optional last-modified date of `source_output`'s
+#'   underlying file, already formatted (see [tc_format_source_mtime()]) --
+#'   included as its own `source_updated=` field, right after `sheet=`, when
+#'   supplied. Distinct from `timestamp=` (when this *export* was made): this
+#'   is when the *source data itself* was last edited.
 #' @return A single-line character string, e.g.
-#'   `"LOG | timestamp=...; download_id=...; output=...; sheet=...; dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
+#'   `"LOG | timestamp=...; download_id=...; output=...; sheet=...; source_updated=...; dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
 tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
                                    chart_type, selections, chart_id = NULL,
                                    favorite_download_id = NULL,
-                                   source_output = NULL, source_sheet = NULL) {
+                                   source_output = NULL, source_sheet = NULL,
+                                   source_mtime = NULL) {
   parts <- c(sprintf("timestamp=%s", tc_now()))
   if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
     parts <- c(parts, sprintf("download_id=%s", chart_id))
@@ -853,6 +892,9 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
   }
   if (!is.null(source_sheet) && nzchar(trimws(tc_or(source_sheet, "")))) {
     parts <- c(parts, sprintf("sheet=%s", source_sheet))
+  }
+  if (!is.null(source_mtime) && nzchar(trimws(tc_or(source_mtime, "")))) {
+    parts <- c(parts, sprintf("source_updated=%s", source_mtime))
   }
   parts <- c(
     parts,
@@ -889,9 +931,9 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
 #' @param favorite_download_id Optional id shared by every chart in the same
 #'   "Download all favorites" click (see [tc_build_ppttc_slide_block()] and
 #'   [tc_build_datasheet_log()]) -- `NULL` for a solo "Download slide" click.
-#' @param source_output,source_sheet Optional data-source identifiers (see
-#'   [tc_build_datasheet_log()]) -- passed straight through to the chart
-#'   datasheet's corner-cell log, nowhere else.
+#' @param source_output,source_sheet,source_mtime Optional data-source
+#'   identifiers (see [tc_build_datasheet_log()]) -- passed straight through
+#'   to the chart datasheet's corner-cell log, nowhere else.
 #' @return list(zip_path, rendered, template, note) invisibly.
 tc_build_slide_zip <- function(zip_path,
                                tc_data,
@@ -912,7 +954,8 @@ tc_build_slide_zip <- function(zip_path,
                                chart_id         = NULL,
                                favorite_download_id = NULL,
                                source_output    = NULL,
-                               source_sheet     = NULL) {
+                               source_sheet     = NULL,
+                               source_mtime     = NULL) {
 
   resolved_type <- normalize_tc_chart_type(chart_type)
   template_path <- tc_template_for_chart_type(resolved_type, templates_dir, template_override)
@@ -930,14 +973,9 @@ tc_build_slide_zip <- function(zip_path,
   # `slide_matrix` (already reflecting the displayed plot type); otherwise derive
   # it from the table data and orient it for the templates.
   is_faceted <- is_tc_workbook_list(tc_data)
-  if (!is.null(slide_matrix)) {
-    slide_matrix <- as.data.frame(slide_matrix, stringsAsFactors = FALSE, check.names = FALSE)
-  } else {
-    slide_matrix <- if (is_faceted) tc_data[[1]] else tc_data
-    slide_matrix <- tc_slide_orientation(slide_matrix, chart_type)
-  }
-  # Order the category axis (matches the displayed figure by default).
-  slide_matrix <- tc_order_slide_matrix(slide_matrix, slide_order)
+  slide_matrix <- tc_resolve_slide_matrix(
+    if (is_faceted) tc_data[[1]] else tc_data, chart_type, slide_matrix, slide_order
+  )
   note <- if (is_faceted) {
     sprintf("data has %d facets; slide shows first facet '%s', table contains all facets",
             length(tc_data), names(tc_data)[[1]])
@@ -963,7 +1001,8 @@ tc_build_slide_zip <- function(zip_path,
     chart_id        = chart_id,
     favorite_download_id = favorite_download_id,
     source_output   = source_output,
-    source_sheet    = source_sheet
+    source_sheet    = source_sheet,
+    source_mtime    = source_mtime
   )
 
   if (!has_template) {

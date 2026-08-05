@@ -138,6 +138,28 @@ test_that("datasheet log includes source_output/source_sheet only when supplied"
   expect_false(grepl("sheet=", without_source, fixed = TRUE))
 })
 
+test_that("datasheet log includes source_updated only when source_mtime is supplied", {
+  with_mtime    <- tc_build_datasheet_log("D", "T", "S", "line", list(),
+                                          source_output = "3a", source_mtime = "2026-01-02 03:04:05")
+  without_mtime <- tc_build_datasheet_log("D", "T", "S", "line", list(), source_output = "3a")
+  expect_true(grepl("source_updated=2026-01-02 03:04:05", with_mtime, fixed = TRUE))
+  expect_false(grepl("source_updated=", without_mtime, fixed = TRUE))
+  # source_updated sits right after sheet=, before dashboard=
+  expect_true(grepl("output=3a; source_updated=2026-01-02 03:04:05; dashboard=", with_mtime, fixed = TRUE))
+})
+
+test_that("tc_format_source_mtime formats an existing file's mtime, blank otherwise", {
+  f <- tempfile(fileext = ".xlsx")
+  writeLines("x", f)
+  formatted <- tc_format_source_mtime(f)
+  expect_true(grepl("^\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}$", formatted))
+
+  expect_equal(tc_format_source_mtime(tempfile()), "")
+  expect_equal(tc_format_source_mtime(NA_character_), "")
+  expect_equal(tc_format_source_mtime(""), "")
+  expect_equal(tc_format_source_mtime(NULL), "")
+})
+
 test_that("a datasheet_log, when supplied, replaces the null corner cell", {
   json <- tc_build_ppttc_json(sample_matrix(), "t.pptx", "Title", "Fig",
                                datasheet_log = "LOG | dashboard=D; tab=T")

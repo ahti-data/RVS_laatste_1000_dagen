@@ -121,10 +121,10 @@ export_history_remove <- function(id) {
 #'   whatever exists at that time.
 #' @param slide_order Resolved category order mode.
 #' @param dashboard_title,tab_label,subtab_label,selections Export log metadata.
-#' @param source_output,source_sheet Optional data-source identifiers (see
-#'   `tc_build_datasheet_log()` in `utils/slide_download.R`), stored on the
-#'   entry so a redownload stamps the same values into the datasheet corner
-#'   cell as the original export did.
+#' @param source_output,source_sheet,source_mtime Optional data-source
+#'   identifiers (see `tc_build_datasheet_log()` in `utils/slide_download.R`),
+#'   stored on the entry so a redownload stamps the same values into the
+#'   datasheet corner cell as the original export did.
 #' @param favorite_download_id Optional id shared by every chart from the
 #'   same "Download all favorites" click or bulk regenerate -- `NULL` for a
 #'   solo download.
@@ -139,7 +139,7 @@ tc_history_capture <- function(
     tc_data, chart_type, slide_matrix = NULL,
     slide_title = "", figure_title = "", template_override = "", slide_order = "auto",
     dashboard_title = "", tab_label = "", subtab_label = "",
-    selections = NULL, source_output = NULL, source_sheet = NULL,
+    selections = NULL, source_output = NULL, source_sheet = NULL, source_mtime = NULL,
     favorite_download_id = NULL, module_id = NULL,
     filename_prefix = "chart", templates_dir = NULL
 ) {
@@ -163,6 +163,7 @@ tc_history_capture <- function(
     selections        = selections,
     source_output     = source_output,
     source_sheet      = source_sheet,
+    source_mtime      = source_mtime,
     favorite_download_id = favorite_download_id,
     module_id         = module_id,
     slide_order       = slide_order,
@@ -195,6 +196,7 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
     selections        = entry$selections,
     source_output     = tc_or(entry$source_output, ""),
     source_sheet      = tc_or(entry$source_sheet, ""),
+    source_mtime      = tc_or(entry$source_mtime, ""),
     filename_prefix   = tc_or(entry$filename_prefix, "chart"),
     templates_dir     = templates_dir,
     template_override = tc_or(entry$template_override, ""),
@@ -267,6 +269,7 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
       selections        = live_spec$selections,
       source_output     = live_spec$source_output,
       source_sheet      = live_spec$source_sheet,
+      source_mtime      = live_spec$source_mtime,
       favorite_download_id = favorite_download_id,
       module_id         = tc_or(entry$module_id, ""),
       filename_prefix   = live_spec$filename_prefix,
@@ -285,7 +288,8 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
       subtab_label = live_spec$subtab_label, chart_type = live_spec$chart_type,
       selections = live_spec$selections, chart_id = download_id,
       favorite_download_id = favorite_download_id,
-      source_output = live_spec$source_output, source_sheet = live_spec$source_sheet
+      source_output = live_spec$source_output, source_sheet = live_spec$source_sheet,
+      source_mtime = live_spec$source_mtime
     )
     label <- tc_or(
       Find(function(x) !is.null(x) && nzchar(x),
@@ -327,7 +331,8 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
     subtab_label = tc_or(new_entry$subtab_label, ""), chart_type = new_entry$chart_type,
     selections = new_entry$selections, chart_id = new_entry$id,
     favorite_download_id = favorite_download_id,
-    source_output = tc_or(new_entry$source_output, ""), source_sheet = tc_or(new_entry$source_sheet, "")
+    source_output = tc_or(new_entry$source_output, ""), source_sheet = tc_or(new_entry$source_sheet, ""),
+    source_mtime = tc_or(new_entry$source_mtime, "")
   )
   slide_matrix <- if (!is.null(new_entry$slide_matrix_table)) {
     favorites_table_as_df(new_entry$slide_matrix_table)
@@ -369,7 +374,8 @@ export_history_snapshot_spec <- function(entry, templates_dir = NULL) {
     subtab_label = tc_or(entry$subtab_label, ""), chart_type = entry$chart_type,
     selections = entry$selections, chart_id = entry$id,
     favorite_download_id = entry$favorite_download_id,
-    source_output = tc_or(entry$source_output, ""), source_sheet = tc_or(entry$source_sheet, "")
+    source_output = tc_or(entry$source_output, ""), source_sheet = tc_or(entry$source_sheet, ""),
+    source_mtime = tc_or(entry$source_mtime, "")
   )
   slide_matrix <- if (!is.null(entry$slide_matrix_table)) {
     favorites_table_as_df(entry$slide_matrix_table)
@@ -439,6 +445,152 @@ export_history_regenerate_many <- function(entries, zip_path, session, templates
   live_count <- sum(vapply(prepared, function(p) isTRUE(p$live), logical(1)))
   tc_build_deck_from_specs(specs, zip_path, ppttc_exe)
   invisible(list(live_count = live_count, total = length(specs)))
+}
+
+#' Regenerate just the think-cell Excel table for one history entry -- no
+#' slide/pptx, no `tc_build_slide_zip()` -- live, via the session's chart
+#' registry, when possible; otherwise from the entry's own frozen snapshot.
+#' Same category ordering the slide/table export uses
+#' ([tc_resolve_slide_matrix()] + [tc_reorder_by_categories()], both in
+#' `utils/slide_download.R`), and the same corner-cell provenance stamp the
+#' plain "Download data (think-cell)" button uses
+#' ([tc_stamp_tc_matrix_corner()]) -- but unlike that button, this one *is*
+#' logged to Export History (mints a fresh id), since every other regenerate
+#' action is.
+#' @param entry A history entry.
+#' @param session The Shiny session (for the live chart registry lookup).
+#' @param templates_dir Optional templates directory override (mainly for tests).
+#' @return `list(live = TRUE/FALSE, data = <stamped think-cell matrix>,
+#'   filename_prefix = ...)`.
+export_history_regenerate_excel_one <- function(entry, session, templates_dir = NULL) {
+  reg <- tc_chart_registry_get(session, tc_or(entry$module_id, ""))
+  live_spec <- NULL
+  if (!is.null(reg)) {
+    live_spec <- tryCatch(reg$get_spec(), error = function(e) NULL)
+    if (!is.null(live_spec) && isTRUE(live_spec$is_faceted)) live_spec <- NULL
+  }
+
+  if (!is.null(live_spec)) {
+    history_entry <- tc_history_capture(
+      tc_data           = live_spec$tc_data,
+      chart_type        = live_spec$chart_type,
+      slide_matrix      = live_spec$slide_matrix,
+      slide_title       = live_spec$slide_title,
+      figure_title      = live_spec$figure_title,
+      template_override = live_spec$template_override,
+      slide_order       = live_spec$slide_order,
+      dashboard_title   = live_spec$dashboard_title,
+      tab_label         = live_spec$tab_label,
+      subtab_label      = live_spec$subtab_label,
+      selections        = live_spec$selections,
+      source_output     = live_spec$source_output,
+      source_sheet      = live_spec$source_sheet,
+      source_mtime      = live_spec$source_mtime,
+      module_id         = tc_or(entry$module_id, ""),
+      filename_prefix   = live_spec$filename_prefix,
+      templates_dir     = templates_dir
+    )
+    history_entry$id <- export_history_new_id()
+    download_id <- export_history_add(history_entry)
+
+    ordered_matrix <- tc_resolve_slide_matrix(
+      live_spec$tc_data, live_spec$chart_type, live_spec$slide_matrix, live_spec$slide_order
+    )
+    tc_data <- tc_reorder_by_categories(live_spec$tc_data, names(ordered_matrix)[-1])
+
+    log_line <- tc_build_datasheet_log(
+      dashboard_title = live_spec$dashboard_title, tab_label = live_spec$tab_label,
+      subtab_label = live_spec$subtab_label, chart_type = live_spec$chart_type,
+      selections = live_spec$selections, chart_id = download_id,
+      source_output = live_spec$source_output, source_sheet = live_spec$source_sheet,
+      source_mtime = live_spec$source_mtime
+    )
+    return(list(
+      live = TRUE,
+      data = tc_stamp_tc_matrix_corner(tc_data, log_line),
+      filename_prefix = tc_or(live_spec$filename_prefix, "chart")
+    ))
+  }
+
+  # Fallback: this chart's module isn't registered in the current session --
+  # rebuild from its own frozen snapshot instead, still as a brand-new
+  # history entry (every regenerate mints one, live or not).
+  new_entry <- entry
+  new_entry$id <- export_history_new_id()
+  new_entry$favorite_download_id <- NULL
+  new_entry$created_at <- NULL
+  export_history_add(new_entry)
+
+  tc_data <- favorites_table_as_df(new_entry$tc_data_table)
+  slide_matrix <- if (!is.null(new_entry$slide_matrix_table)) {
+    favorites_table_as_df(new_entry$slide_matrix_table)
+  } else {
+    NULL
+  }
+  ordered_matrix <- tc_resolve_slide_matrix(tc_data, new_entry$chart_type, slide_matrix, tc_or(new_entry$slide_order, "auto"))
+  tc_data <- tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
+
+  log_line <- tc_build_datasheet_log(
+    dashboard_title = tc_or(new_entry$dashboard_title, ""), tab_label = tc_or(new_entry$tab_label, ""),
+    subtab_label = tc_or(new_entry$subtab_label, ""), chart_type = new_entry$chart_type,
+    selections = new_entry$selections, chart_id = new_entry$id,
+    source_output = tc_or(new_entry$source_output, ""), source_sheet = tc_or(new_entry$source_sheet, ""),
+    source_mtime = tc_or(new_entry$source_mtime, "")
+  )
+  list(
+    live = FALSE,
+    data = tc_stamp_tc_matrix_corner(tc_data, log_line),
+    filename_prefix = tc_or(new_entry$filename_prefix, "chart")
+  )
+}
+
+#' Regenerate just the think-cell Excel table for an arbitrary list of
+#' history entries (the Export History tab's checkbox-driven "Regenerate
+#' Excel only"). One entry writes a bare `.xlsx` straight to `file` (no zip
+#' wrapper needed for a single file); two or more zip one
+#' `<prefix>_thinkcell_<date>.xlsx` per entry. Every entry mints a fresh id
+#' and logs a new history entry, same as the other regenerate actions.
+#' @param entries List of history entries.
+#' @param file Output path (the `file` handed in by downloadHandler) -- a
+#'   bare `.xlsx` for one entry, a `.zip` for two or more; the caller's own
+#'   `filename()` reactive is what actually names it for the browser.
+#' @param session The Shiny session (for the live chart registry lookup).
+#' @return `list(live_count, total)`, invisibly.
+export_history_regenerate_excel_many <- function(entries, file, session, templates_dir = NULL) {
+  results <- lapply(entries, export_history_regenerate_excel_one, session = session, templates_dir = templates_dir)
+  live_count <- sum(vapply(results, function(r) isTRUE(r$live), logical(1)))
+
+  if (length(results) == 1) {
+    write_tc_xlsx(results[[1]]$data, file)
+    return(invisible(list(live_count = live_count, total = 1)))
+  }
+
+  work <- tempfile("tc_excel_only_")
+  dir.create(work)
+  old_wd <- getwd()
+  on.exit({
+    setwd(old_wd)
+    unlink(work, recursive = TRUE, force = TRUE)
+  }, add = TRUE)
+
+  used_names <- character(0)
+  for (r in results) {
+    base <- tc_or(r$filename_prefix, "chart")
+    name <- paste0(base, "_thinkcell_", Sys.Date(), ".xlsx")
+    n <- 2
+    while (name %in% used_names) {
+      name <- paste0(base, "_thinkcell_", Sys.Date(), "_", n, ".xlsx")
+      n <- n + 1
+    }
+    used_names <- c(used_names, name)
+    write_tc_xlsx(r$data, file.path(work, name))
+  }
+
+  files <- basename(list.files(work, full.names = TRUE))
+  file_abs <- normalizePath(file, winslash = "/", mustWork = FALSE)
+  setwd(work)
+  utils::zip(zipfile = file_abs, files = files, flags = "-q -X")
+  invisible(list(live_count = live_count, total = length(results)))
 }
 
 #' Compact breadcrumb + chart-type/template line for one history row.
@@ -607,17 +759,6 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
               )
             }
           )
-        ),
-        shiny::tags$div(
-          style = "display:flex; gap:6px; flex-shrink:0;",
-          shiny::downloadButton(
-            session$ns(paste0("redownload_", e$id)), "Redownload",
-            class = "btn-default btn-sm"
-          ),
-          shiny::downloadButton(
-            session$ns(paste0("regenerate_", e$id)), "Regenerate",
-            class = "btn-default btn-sm"
-          )
         )
       )
     }
@@ -647,10 +788,6 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
               style = "font-size:11px; color:#9CA3AF;",
               paste0("Downloaded: ", g$created_at)
             )
-          ),
-          shiny::downloadButton(
-            session$ns(paste0("regenerate_group_", g$favorite_download_id)), "Regenerate",
-            class = "btn-default btn-sm"
           )
         ),
         if (is_open) shiny::tagList(lapply(g$members, function(m) entry_row_ui(m, indent = TRUE)))
@@ -688,50 +825,6 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
     # displayed entries have their own checkbox checked.
     selected_entries <- shiny::reactive({
       Filter(function(e) isTRUE(selected[[e$id]]), filtered_entries())
-    })
-
-    # (Re)register one redownload + one regenerate download handler per
-    # currently-listed entry, mirroring favorites_panel_server()'s equivalent
-    # pattern for its remove buttons. History entries are immutable once
-    # written, so re-registering on every poll tick is harmless -- just
-    # re-reads the same on-disk snapshot.
-    shiny::observe({
-      entries <- entries_reactive()
-      lapply(entries, function(e) {
-        local({
-          entry <- e
-          output[[paste0("redownload_", entry$id)]] <- shiny::downloadHandler(
-            filename = function() {
-              paste0(tc_or(entry$filename_prefix, "chart"), "_slide_", Sys.Date(), ".zip")
-            },
-            content = function(file) {
-              export_history_redownload(entry, file)
-            }
-          )
-          output[[paste0("regenerate_", entry$id)]] <- shiny::downloadHandler(
-            filename = function() {
-              paste0(tc_or(entry$filename_prefix, "chart"), "_slide_regenerated_", Sys.Date(), ".zip")
-            },
-            content = function(file) {
-              export_history_regenerate_many(list(entry), file, session)
-            }
-          )
-        })
-      })
-
-      bulk_ids <- unique(Filter(nzchar, vapply(entries, function(e) tc_or(e$favorite_download_id, ""), character(1))))
-      lapply(bulk_ids, function(gid) {
-        local({
-          group_id <- gid
-          output[[paste0("regenerate_group_", group_id)]] <- shiny::downloadHandler(
-            filename = function() paste0("favorites_deck_regenerated_", Sys.Date(), ".zip"),
-            content = function(file) {
-              members <- Filter(function(e) identical(tc_or(e$favorite_download_id, ""), group_id), entries)
-              export_history_regenerate_many(members, file, session)
-            }
-          )
-        })
-      })
     })
 
     # Expand/collapse state for bulk groups, and a lazily-registered toggle +
@@ -811,6 +904,10 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
         shiny::downloadButton(
           session$ns("regenerate_selected"), "Regenerate selected against today's data",
           class = "btn-primary btn-sm"
+        ),
+        shiny::downloadButton(
+          session$ns("regenerate_excel_selected"), "Regenerate Excel only (think-cell format)",
+          class = "btn-default btn-sm"
         )
       )
     })
@@ -830,6 +927,22 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
         entries <- selected_entries()
         shiny::req(length(entries) > 0)
         export_history_regenerate_many(entries, file, session)
+      }
+    )
+
+    output$regenerate_excel_selected <- shiny::downloadHandler(
+      filename = function() {
+        entries <- selected_entries()
+        if (length(entries) == 1) {
+          paste0(tc_or(entries[[1]]$filename_prefix, "chart"), "_thinkcell_regenerated_", Sys.Date(), ".xlsx")
+        } else {
+          paste0("export_history_selected_thinkcell_regenerated_", Sys.Date(), ".zip")
+        }
+      },
+      content = function(file) {
+        entries <- selected_entries()
+        shiny::req(length(entries) > 0)
+        export_history_regenerate_excel_many(entries, file, session)
       }
     )
   })

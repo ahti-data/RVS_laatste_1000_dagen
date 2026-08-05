@@ -403,3 +403,115 @@ test_that("export_history_download_many with 2+ entries combines them into one d
     expect_true("favorites_thinkcell_tables.xlsx" %in% files)
   })
 })
+
+test_that("export_history_regenerate_excel_one falls back to a snapshot rebuild when the chart isn't registered", {
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", module_id = "not_a_registered_module"
+    )
+    entry$id <- export_history_new_id()
+
+    res <- export_history_regenerate_excel_one(entry, fake_session())
+    expect_false(res$live)
+    expect_equal(res$filename_prefix, "revenue_chart")
+    expect_true(grepl("^LOG \\|", names(res$data)[1]))
+
+    history <- export_history_list()
+    expect_length(history, 1)
+    expect_false(identical(history[[1]]$id, entry$id))
+  })
+})
+
+test_that("export_history_regenerate_excel_one uses the live get_spec callback when the chart is registered", {
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", module_id = "live_chart_dl"
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+
+    session <- fake_session()
+    live_data <- data.frame(lab = c("X", "Y"), `2023` = c(1, 2),
+                            check.names = FALSE, stringsAsFactors = FALSE)
+    names(live_data) <- c("", "2023")
+    spec_calls <- 0
+    tc_chart_registry_register(session, "live_chart_dl", list(
+      build_zip = function(zip_path) stop("not used in this test"),
+      get_spec = function() {
+        spec_calls <<- spec_calls + 1
+        list(
+          tc_data = live_data, chart_type = "line", slide_matrix = NULL,
+          is_faceted = FALSE, slide_title = "", figure_title = "Live Title",
+          template_override = "", slide_order = "auto",
+          dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+          selections = NULL, source_output = "", source_sheet = "",
+          filename_prefix = "revenue_chart"
+        )
+      }
+    ))
+
+    res <- export_history_regenerate_excel_one(entry, session)
+    expect_true(res$live)
+    expect_equal(spec_calls, 1)
+    expect_equal(as.character(res$data[[1]]), c("X", "Y"))
+
+    history <- export_history_list()
+    expect_length(history, 2)
+    expect_true(any(vapply(history, function(e) identical(e$figure_title, "Live Title"), logical(1))))
+  })
+})
+
+test_that("export_history_regenerate_excel_many with one entry writes a bare xlsx, no zip wrapper", {
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart"
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+
+    out <- tempfile(fileext = ".xlsx")
+    res <- export_history_regenerate_excel_many(list(entry), out, fake_session())
+    expect_equal(res$total, 1)
+    expect_false(res$live_count == 1)  # not registered -> snapshot fallback
+
+    df <- as.data.frame(readxl::read_excel(out, col_names = FALSE))
+    expect_true(grepl("^LOG \\|", df[1, 1]))
+
+    expect_length(export_history_list(), 2)
+  })
+})
+
+test_that("export_history_regenerate_excel_many with 2+ entries zips one xlsx per entry", {
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    e1 <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Revenue", filename_prefix = "revenue_chart"
+    )
+    e1$id <- export_history_new_id()
+    export_history_add(e1)
+    e2 <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Cost", filename_prefix = "cost_chart"
+    )
+    e2$id <- export_history_new_id()
+    export_history_add(e2)
+
+    z <- tempfile(fileext = ".zip")
+    res <- export_history_regenerate_excel_many(list(e1, e2), z, fake_session())
+    expect_equal(res$total, 2)
+
+    files <- utils::unzip(z, list = TRUE)$Name
+    expect_true(any(grepl("^revenue_chart_thinkcell_.*\\.xlsx$", files)))
+    expect_true(any(grepl("^cost_chart_thinkcell_.*\\.xlsx$", files)))
+
+    expect_length(export_history_list(), 4)
+  })
+})

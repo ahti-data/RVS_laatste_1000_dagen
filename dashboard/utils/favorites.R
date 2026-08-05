@@ -176,10 +176,10 @@ favorites_table_to_storage <- function(df) {
 #' @param template_override Optional explicit template filename/path.
 #' @param slide_order Category order mode (see [tc_order_slide_matrix()]).
 #' @param dashboard_title,tab_label,subtab_label,selections Export log metadata.
-#' @param source_output,source_sheet Optional data-source identifiers (see
-#'   [tc_build_datasheet_log()] in `utils/slide_download.R`), stored on the
-#'   entry so a later deck download can stamp them into this favorite's own
-#'   datasheet corner cell, same as the single-chart download.
+#' @param source_output,source_sheet,source_mtime Optional data-source
+#'   identifiers (see [tc_build_datasheet_log()] in `utils/slide_download.R`),
+#'   stored on the entry so a later deck download can stamp them into this
+#'   favorite's own datasheet corner cell, same as the single-chart download.
 #' @param module_id The chart's `chart_data_downloads_server(id = ...)`,
 #'   stored on the entry so a later "regenerate" (see `utils/export_history.R`)
 #'   can look this chart back up in the session's live chart registry and
@@ -194,7 +194,8 @@ favorites_capture <- function(
     agg_fun = NULL, category_order = NULL, series_order = NULL, facet_col = NULL,
     slide_title = "", figure_title = "", template_override = "", slide_order = "auto",
     dashboard_title = "", tab_label = "", subtab_label = "",
-    selections = NULL, source_output = NULL, source_sheet = NULL, module_id = NULL,
+    selections = NULL, source_output = NULL, source_sheet = NULL, source_mtime = NULL,
+    module_id = NULL,
     filename_prefix = "chart", label = NULL, templates_dir = NULL
 ) {
   slide_type   <- chart_type
@@ -265,6 +266,7 @@ favorites_capture <- function(
     selections      = selections,
     source_output   = source_output,
     source_sheet    = source_sheet,
+    source_mtime    = source_mtime,
     module_id       = module_id,
     slide_order     = slide_order,
     # slide_block embeds an *absolute* template path, only valid for rendering
@@ -491,6 +493,7 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
         selections        = e$selections,
         source_output     = tc_or(e$source_output, ""),
         source_sheet      = tc_or(e$source_sheet, ""),
+        source_mtime      = tc_or(e$source_mtime, ""),
         favorite_download_id = favorite_download_id,
         module_id         = tc_or(e$module_id, ""),
         filename_prefix   = tc_or(e$filename_prefix, "chart"),
@@ -510,7 +513,8 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
       chart_id        = if (is.na(download_id)) NULL else download_id,
       favorite_download_id = favorite_download_id,
       source_output   = tc_or(e$source_output, ""),
-      source_sheet    = tc_or(e$source_sheet, "")
+      source_sheet    = tc_or(e$source_sheet, ""),
+      source_mtime    = tc_or(e$source_mtime, "")
     )
 
     list(

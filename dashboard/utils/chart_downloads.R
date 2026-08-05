@@ -92,19 +92,19 @@ if (!window.__tcTemplatePickerInit) {
 }
 )"
 
-#' `render` option for the template `selectizeInput`: shows a small
-#' thumbnail (when `item.preview` is set) next to the label, both for each
-#' row in the open dropdown (so a PM can scroll through and see every
-#' template before picking one, instead of choosing blind by name) and for
-#' the currently-selected item once closed (so the choice stays visible
-#' without a separate preview box below the picker).
+#' `render` option for the template `selectizeInput`: shows a thumbnail
+#' (when `item.preview` is set) next to the label, both for each row in the
+#' open dropdown -- large here, since judging a think-cell template by its
+#' shape needs a real look, not a postage stamp -- and for the currently-
+#' selected item once closed (kept small there, so the closed input box
+#' doesn't balloon in height every time something's picked).
 TC_TEMPLATE_PICKER_RENDER_JS <- r"(
 {
   option: function(item, escape) {
     var img = item.preview
-      ? '<img src="' + item.preview + '" style="width:140px;height:79px;object-fit:contain;margin-right:8px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:4px;background:#fff;">'
-      : '<span style="display:inline-block;width:140px;margin-right:8px;"></span>';
-    return '<div style="display:flex;align-items:center;padding:4px 6px;">' + img + '<span>' + escape(item.label) + '</span></div>';
+      ? '<img src="' + item.preview + '" style="width:420px;height:237px;object-fit:contain;margin-right:14px;vertical-align:middle;border:1px solid #E4E7EE;border-radius:4px;background:#fff;">'
+      : '<span style="display:inline-block;width:420px;margin-right:14px;"></span>';
+    return '<div style="display:flex;align-items:center;padding:10px 12px;">' + img + '<span>' + escape(item.label) + '</span></div>';
   },
   item: function(item, escape) {
     var img = item.preview
@@ -113,6 +113,14 @@ TC_TEMPLATE_PICKER_RENDER_JS <- r"(
     return '<div style="display:flex;align-items:center;">' + img + '<span>' + escape(item.label) + '</span></div>';
   }
 }
+)"
+
+#' Overrides Selectize's default dropdown clipping so the enlarged template
+#' thumbnails (see [TC_TEMPLATE_PICKER_RENDER_JS]) actually get the room they
+#' need instead of just becoming scroll-clipped at the old, small-row height.
+TC_TEMPLATE_PICKER_CSS <- r"(
+.tc-slide-template .selectize-dropdown-content { max-height: 75vh; }
+.tc-slide-template .selectize-dropdown { width: auto; min-width: 100%; }
 )"
 
 #' UI for raw and think-cell chart data downloads.
@@ -224,7 +232,8 @@ chart_data_downloads_ui <- function(
           shiny::uiOutput(ns("favorite_status"))
         ),
         shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS)),
-        shiny::tags$script(shiny::HTML(TC_TEMPLATE_PICKER_JS))
+        shiny::tags$script(shiny::HTML(TC_TEMPLATE_PICKER_JS)),
+        shiny::tags$style(shiny::HTML(TC_TEMPLATE_PICKER_CSS))
       )
     )
   }
@@ -263,6 +272,12 @@ chart_data_downloads_ui <- function(
 #'   (raw download excluded -- it isn't a think-cell matrix), so a chart
 #'   found later can be traced back to its source. Omit both for dashboards
 #'   with no such concept.
+#' @param source_mtime Optional last-modified date of `source_output`'s
+#'   underlying file, already formatted via `tc_format_source_mtime()` in
+#'   `utils/slide_download.R` -- like `source_output`/`source_sheet`, a plain
+#'   string or a reactive/function. Stamped as its own `source_updated=`
+#'   field, distinct from the export's own `timestamp=`. Omit if
+#'   `source_output` isn't set either.
 chart_data_downloads_server <- function(
     id,
     data,
@@ -281,7 +296,8 @@ chart_data_downloads_server <- function(
     figure_title = NULL,
     template_override = NULL,
     source_output = NULL,
-    source_sheet = NULL
+    source_sheet = NULL,
+    source_mtime = NULL
 ) {
   shiny::moduleServer(id, function(input, output, session) {
     resolve_opt <- function(x) {
@@ -436,7 +452,8 @@ chart_data_downloads_server <- function(
             chart_type      = resolved_chart_type,
             selections      = tc_ctx_selections(module_id = id),
             source_output   = resolve_opt(source_output),
-            source_sheet    = resolve_opt(source_sheet)
+            source_sheet    = resolve_opt(source_sheet),
+            source_mtime    = resolve_opt(source_mtime)
           )
           write_tc_xlsx(tc_stamp_tc_matrix_corner(tc_data, log_line), file)
         }
@@ -542,6 +559,7 @@ chart_data_downloads_server <- function(
           selections = tc_ctx_selections(module_id = id),
           source_output = resolve_opt(source_output),
           source_sheet = resolve_opt(source_sheet),
+          source_mtime = resolve_opt(source_mtime),
           filename_prefix = filename_prefix
         )
       }
@@ -573,6 +591,7 @@ chart_data_downloads_server <- function(
             selections        = spec$selections,
             source_output     = spec$source_output,
             source_sheet      = spec$source_sheet,
+            source_mtime      = spec$source_mtime,
             favorite_download_id = favorite_download_id,
             module_id         = id,
             filename_prefix   = spec$filename_prefix
@@ -594,6 +613,7 @@ chart_data_downloads_server <- function(
           selections        = spec$selections,
           source_output     = spec$source_output,
           source_sheet      = spec$source_sheet,
+          source_mtime      = spec$source_mtime,
           filename_prefix   = spec$filename_prefix,
           template_override = spec$template_override,
           slide_order       = spec$slide_order,
@@ -646,6 +666,7 @@ chart_data_downloads_server <- function(
           selections        = tc_ctx_selections(module_id = id),
           source_output     = resolve_opt(source_output),
           source_sheet      = resolve_opt(source_sheet),
+          source_mtime      = resolve_opt(source_mtime),
           module_id         = id,
           filename_prefix   = filename_prefix
         )
