@@ -1712,50 +1712,58 @@ safe_read_iteration3_regression <- function(path, label) {
 
 data_path_iteration3_zpk <- resolve_iteration3_subfile("iteration_3c", "zpk_categorieen_tellingen.xlsx")
 data_path_iteration3_top50 <- resolve_iteration3_subfile("iteration_3c", "top50_activiteiten.xlsx")
+data_path_iteration3_cost_3c <- resolve_iteration3_subfile("iteration_3c", "cost_aggregations.xlsx")
+data_path_iteration3_cost_3d <- resolve_iteration3_subfile("iteration_3d", "cost_aggregations.xlsx")
+data_path_iteration3_cost_3e <- resolve_iteration3_subfile("iteration_3e", "cost_aggregations.xlsx")
+data_path_iteration3_regression_3c <- resolve_iteration3_subfile("iteration_3c", "regression_results.xlsx")
+data_path_iteration3_regression_3d <- resolve_iteration3_subfile("iteration_3d", "regression_results.xlsx")
+data_path_iteration3_top50_prest <- resolve_iteration3_subfile("iteration_3d", "top50_prestaties.xlsx")
+data_path_iteration3_acp_ages <- resolve_iteration3_subfile("iteration_3d", "acp_average_ages.xlsx")
+data_path_iteration3_acp_pop <- resolve_iteration3_subfile("iteration_3d", "ACP_population_descriptives.xlsx")
+data_path_iteration3_zvwk <- resolve_iteration3_subfile("iteration_3d", "zvwk_distributions.xlsx")
 
 it3_cost_agg_by_iter <- list(
-  "3c" = safe_read_iteration3_cost_agg(
-    resolve_iteration3_subfile("iteration_3c", "cost_aggregations.xlsx"),
-    "cost_agg_3c"
-  ),
-  "3d" = safe_read_iteration3_cost_agg(
-    resolve_iteration3_subfile("iteration_3d", "cost_aggregations.xlsx"),
-    "cost_agg_3d"
-  ),
-  "3e" = safe_read_iteration3_cost_agg(
-    resolve_iteration3_subfile("iteration_3e", "cost_aggregations.xlsx"),
-    "cost_agg_3e"
-  )
+  "3c" = safe_read_iteration3_cost_agg(data_path_iteration3_cost_3c, "cost_agg_3c"),
+  "3d" = safe_read_iteration3_cost_agg(data_path_iteration3_cost_3d, "cost_agg_3d"),
+  "3e" = safe_read_iteration3_cost_agg(data_path_iteration3_cost_3e, "cost_agg_3e")
 )
 it3_regression_by_iter <- list(
-  "3c" = safe_read_iteration3_regression(
-    resolve_iteration3_subfile("iteration_3c", "regression_results.xlsx"),
-    "regression_3c"
-  ),
-  "3d" = safe_read_iteration3_regression(
-    resolve_iteration3_subfile("iteration_3d", "regression_results.xlsx"),
-    "regression_3d"
-  )
+  "3c" = safe_read_iteration3_regression(data_path_iteration3_regression_3c, "regression_3c"),
+  "3d" = safe_read_iteration3_regression(data_path_iteration3_regression_3d, "regression_3d")
 )
 it3_cost_agg_raw_3c <- it3_cost_agg_by_iter[["3c"]]
 it3_zpk_raw <- safe_read_iteration3_xlsx(data_path_iteration3_zpk, "zpk")
 it3_top50_raw <- safe_read_iteration3_xlsx(data_path_iteration3_top50, "top50_activiteiten")
-it3_top50_prest_raw <- safe_read_iteration3_xlsx(
-  resolve_iteration3_subfile("iteration_3d", "top50_prestaties.xlsx"),
-  "top50_prestaties"
+it3_top50_prest_raw <- safe_read_iteration3_xlsx(data_path_iteration3_top50_prest, "top50_prestaties")
+it3_acp_ages_raw <- safe_read_iteration3_xlsx(data_path_iteration3_acp_ages, "acp_average_ages")
+it3_acp_pop_raw <- safe_read_iteration3_xlsx(data_path_iteration3_acp_pop, "acp_population_descriptives")
+it3_zvwk_raw <- safe_read_iteration3_xlsx(data_path_iteration3_zvwk, "zvwk_distributions")
+
+# Chart-level source_output ids -> the actual file each one reads, so every
+# chart's export can stamp a source_updated= date in its datasheet corner
+# cell (see tc_format_source_mtime() in utils/slide_download.R). Iteration 1
+# is a single file; iteration 2 is a single multi-sheet workbook (every
+# iteration-2 chart shares this same path -- source_sheet is what actually
+# distinguishes them); iteration 3 is one file per sub-output.
+source_output_paths <- list(
+  iter1_all_output       = data_path,
+  iter2_workbook         = data_path_iteration2,
+  iter3_zpk              = data_path_iteration3_zpk,
+  iter3_top50            = data_path_iteration3_top50,
+  iter3_cost_agg_3c      = data_path_iteration3_cost_3c,
+  iter3_cost_agg_3d      = data_path_iteration3_cost_3d,
+  iter3_cost_agg_3e      = data_path_iteration3_cost_3e,
+  iter3_regression_3c    = data_path_iteration3_regression_3c,
+  iter3_regression_3d    = data_path_iteration3_regression_3d,
+  iter3_top50_prest      = data_path_iteration3_top50_prest,
+  iter3_acp_ages         = data_path_iteration3_acp_ages,
+  iter3_acp_pop          = data_path_iteration3_acp_pop,
+  iter3_zvwk             = data_path_iteration3_zvwk
 )
-it3_acp_ages_raw <- safe_read_iteration3_xlsx(
-  resolve_iteration3_subfile("iteration_3d", "acp_average_ages.xlsx"),
-  "acp_average_ages"
-)
-it3_acp_pop_raw <- safe_read_iteration3_xlsx(
-  resolve_iteration3_subfile("iteration_3d", "ACP_population_descriptives.xlsx"),
-  "acp_population_descriptives"
-)
-it3_zvwk_raw <- safe_read_iteration3_xlsx(
-  resolve_iteration3_subfile("iteration_3d", "zvwk_distributions.xlsx"),
-  "zvwk_distributions"
-)
+
+#' Resolved `source_mtime=` value for a chart's `chart_data_downloads_server()`
+#' call, given the `source_output_paths` id it reads from.
+source_mtime_for <- function(id) tc_format_source_mtime(source_output_paths[[id]])
 
 log_msg(sprintf("[startup] APP_ROOT=%s, getwd()=%s", APP_ROOT, normalizePath(getwd(), winslash = "/", mustWork = FALSE)))
 
@@ -3235,7 +3243,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_cost_agg",
     agg_fun = NULL,
-    figure_title = it3_cost_title
+    figure_title = it3_cost_title,
+    source_output = function() paste0("iter3_cost_agg_", input$it3_cost_iter %||% "3c"),
+    source_mtime = function() source_mtime_for(paste0("iter3_cost_agg_", input$it3_cost_iter %||% "3c"))
   )
 
   observe({
@@ -3469,7 +3479,9 @@ server <- function(input, output, session) {
     value_col = "metric_value",
     filename_prefix = "iteratie3_zpk",
     agg_fun = NULL,
-    figure_title = it3_zpk_title
+    figure_title = it3_zpk_title,
+    source_output = "iter3_zpk",
+    source_mtime = function() source_mtime_for("iter3_zpk")
   )
 
   it3_top50_filtered <- reactive({
@@ -3741,7 +3753,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_main",
     agg_fun = NULL,
-    figure_title = it3_top50_title_main
+    figure_title = it3_top50_title_main,
+    source_output = "iter3_top50",
+    source_mtime = function() source_mtime_for("iter3_top50")
   )
 
   chart_data_downloads_server(
@@ -3753,7 +3767,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_compare",
     agg_fun = NULL,
-    figure_title = it3_top50_title_cmp
+    figure_title = it3_top50_title_cmp,
+    source_output = "iter3_top50",
+    source_mtime = function() source_mtime_for("iter3_top50")
   )
 
   it3_top50_prest_filtered <- reactive({
@@ -3903,7 +3919,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_prest_main",
     agg_fun = NULL,
-    figure_title = it3_prest_title_main
+    figure_title = it3_prest_title_main,
+    source_output = "iter3_top50_prest",
+    source_mtime = function() source_mtime_for("iter3_top50_prest")
   )
 
   chart_data_downloads_server(
@@ -3915,7 +3933,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_top50_prest_compare",
     agg_fun = NULL,
-    figure_title = it3_prest_title_cmp
+    figure_title = it3_prest_title_cmp,
+    source_output = "iter3_top50_prest",
+    source_mtime = function() source_mtime_for("iter3_top50_prest")
   )
 
   it3_acp_pop_filtered <- reactive({
@@ -4018,7 +4038,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_acp_descriptives",
     agg_fun = NULL,
-    figure_title = it3_acp_title
+    figure_title = it3_acp_title,
+    source_output = "iter3_acp_pop",
+    source_mtime = function() source_mtime_for("iter3_acp_pop")
   )
 
   it3_zvwk_filtered <- reactive({
@@ -4119,7 +4141,9 @@ server <- function(input, output, session) {
     value_col = "pop_num",
     filename_prefix = "iteratie3_zvwk",
     agg_fun = NULL,
-    figure_title = it3_zvwk_title
+    figure_title = it3_zvwk_title,
+    source_output = "iter3_zvwk",
+    source_mtime = function() source_mtime_for("iter3_zvwk")
   )
 
   it3_regression_filtered <- reactive({
@@ -4235,7 +4259,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "iteratie3_regressie",
     agg_fun = NULL,
-    figure_title = it3_reg_title
+    figure_title = it3_reg_title,
+    source_output = function() paste0("iter3_regression_", input$it3_reg_iter %||% "3c"),
+    source_mtime = function() source_mtime_for(paste0("iter3_regression_", input$it3_reg_iter %||% "3c"))
   )
 
   # ==========================================
@@ -4289,7 +4315,9 @@ server <- function(input, output, session) {
     value_col = "n_mensen",
     filename_prefix = "basispopulatie",
     agg_fun = NULL,
-    figure_title = "Basispopulatie"
+    figure_title = "Basispopulatie",
+    source_output = "iter1_all_output",
+    source_mtime = function() source_mtime_for("iter1_all_output")
   )
   
   # ==========================================
@@ -4392,7 +4420,9 @@ server <- function(input, output, session) {
     value_col = "waarde",
     filename_prefix = "zorg_totaal",
     agg_fun = NULL,
-    figure_title = "Zorg Totaal"
+    figure_title = "Zorg Totaal",
+    source_output = "iter1_all_output",
+    source_mtime = function() source_mtime_for("iter1_all_output")
   )
   
   # ==========================================
@@ -4778,7 +4808,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "zorg_over_tijd",
     agg_fun = NULL,
-    figure_title = iter1_tijd_title
+    figure_title = iter1_tijd_title,
+    source_output = "iter1_all_output",
+    source_mtime = function() source_mtime_for("iter1_all_output")
   )
   
   # ==========================================
@@ -4907,7 +4939,9 @@ server <- function(input, output, session) {
     value_col = "mediaan_per_persoon",
     filename_prefix = "kosten_boxplot",
     agg_fun = NULL,
-    figure_title = iter1_cost_title
+    figure_title = iter1_cost_title,
+    source_output = "iter1_all_output",
+    source_mtime = function() source_mtime_for("iter1_all_output")
   )
 
   # ==========================================
@@ -5086,7 +5120,9 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "zorg_butterfly",
     agg_fun = NULL,
-    figure_title = iter1_bfly_title
+    figure_title = iter1_bfly_title,
+    source_output = "iter1_all_output",
+    source_mtime = function() source_mtime_for("iter1_all_output")
   )
 
   # ==========================================
@@ -5209,7 +5245,9 @@ server <- function(input, output, session) {
     value_col = "waarde",
     filename_prefix = "interventies",
     agg_fun = NULL,
-    figure_title = "Curatieve Interventies"
+    figure_title = "Curatieve Interventies",
+    source_output = "iter1_all_output",
+    source_mtime = function() source_mtime_for("iter1_all_output")
   )
 
   # ==========================================
@@ -5943,7 +5981,17 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "rvs_uitkomsten",
     agg_fun = NULL,
-    figure_title = agg_plot_title
+    figure_title = agg_plot_title,
+    source_output = "iter2_workbook",
+    source_sheet = function() {
+      base <- active_agg_sheet()
+      if (isTRUE(input$agg_corrected) && isTRUE(agg_corrected_available())) {
+        corrected <- corrected_sheet_for(base)
+        if (!is.na(corrected)) return(paste(base, corrected, sep = ", "))
+      }
+      base
+    },
+    source_mtime = function() source_mtime_for("iter2_workbook")
   )
 
   heatmap_available_splits <- reactive({
@@ -6206,7 +6254,10 @@ server <- function(input, output, session) {
     value_col = "value_num",
     filename_prefix = "rvs_heatmap",
     agg_fun = NULL,
-    figure_title = heatmap_title
+    figure_title = heatmap_title,
+    source_output = "iter2_workbook",
+    source_sheet = "zvw, msz_prestaties",
+    source_mtime = function() source_mtime_for("iter2_workbook")
   )
 
   observe({
@@ -6854,7 +6905,10 @@ server <- function(input, output, session) {
     value_col = "export_value",
     filename_prefix = "rvs_top_codes",
     agg_fun = NULL,
-    figure_title = top_plot_title
+    figure_title = top_plot_title,
+    source_output = "iter2_workbook",
+    source_sheet = function() input$top_sheet,
+    source_mtime = function() source_mtime_for("iter2_workbook")
   )
 
   favorites_panel_server("favorites")
