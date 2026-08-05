@@ -934,6 +934,16 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
 #' @param source_output,source_sheet,source_mtime Optional data-source
 #'   identifiers (see [tc_build_datasheet_log()]) -- passed straight through
 #'   to the chart datasheet's corner-cell log, nowhere else.
+#' @param asset_path,asset_label Optional path to a captured PNG snapshot of
+#'   this chart (see `TC_CHART_CAPTURE_JS`/`export_history_asset_path()` in
+#'   `utils/chart_downloads.R`/`utils/export_history.R`) and its display
+#'   label. When `asset_path` exists on disk, a `charts_overview.html` (see
+#'   [tc_build_charts_overview_html()] in `utils/favorites.R`) is written
+#'   into the ZIP alongside the table/slide -- the same self-contained
+#'   viewer a bulk favorites download already gets, now for a solo export
+#'   too. Silently omitted (not an error) when `asset_path` is `NULL` or the
+#'   file doesn't exist -- e.g. no `plot_output_id` was wired, the client
+#'   capture failed/timed out, or this chart has no Plotly widget at all.
 #' @return list(zip_path, rendered, template, note) invisibly.
 tc_build_slide_zip <- function(zip_path,
                                tc_data,
@@ -955,7 +965,9 @@ tc_build_slide_zip <- function(zip_path,
                                favorite_download_id = NULL,
                                source_output    = NULL,
                                source_sheet     = NULL,
-                               source_mtime     = NULL) {
+                               source_mtime     = NULL,
+                               asset_path       = NULL,
+                               asset_label      = NULL) {
 
   resolved_type <- normalize_tc_chart_type(chart_type)
   template_path <- tc_template_for_chart_type(resolved_type, templates_dir, template_override)
@@ -1061,6 +1073,17 @@ tc_build_slide_zip <- function(zip_path,
         "The underlying data (", basename(table_path), ") matches this chart exactly.\n"
       ), file.path(work, "README_render_slide.txt"), useBytes = TRUE)
     }
+  }
+
+  # One page with the captured chart image, if any -- same viewer a bulk
+  # favorites download already gets (tc_build_charts_overview_html()), now
+  # for a solo export too. A no-op when asset_path is NULL/doesn't exist.
+  overview_html <- tc_build_charts_overview_html(list(list(
+    label = tc_or(asset_label, tc_or(figure_title, tc_or(slide_title, filename_prefix))),
+    asset_path = asset_path
+  )))
+  if (!is.na(overview_html)) {
+    writeLines(overview_html, file.path(work, "charts_overview.html"), useBytes = TRUE)
   }
 
   # ---- zip (flat) -----------------------------------------------------------

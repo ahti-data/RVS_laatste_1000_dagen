@@ -191,6 +191,42 @@ test_that("no-template chart still yields a ZIP with table + explanation", {
   expect_false(any(grepl("slide", files)))
 })
 
+test_that("tc_build_slide_zip embeds charts_overview.html when asset_path exists", {
+  png_path <- tempfile(fileext = ".png")
+  writeBin(as.raw(c(1, 2, 3)), png_path)
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "waterfall",
+    filename_prefix = "bfly", templates_dir = templates_dir,
+    write_table_fun = stub_writer, asset_path = png_path, asset_label = "My Chart"
+  )
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("charts_overview.html" %in% files)
+
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  html <- paste(readLines(file.path(extract_dir, "charts_overview.html")), collapse = "\n")
+  expect_true(grepl("My Chart", html, fixed = TRUE))
+  expect_true(grepl("data:image/png;base64,", html, fixed = TRUE))
+})
+
+test_that("tc_build_slide_zip omits charts_overview.html when asset_path is NULL or missing", {
+  z1 <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z1, sample_matrix(), "waterfall",
+    filename_prefix = "bfly", templates_dir = templates_dir, write_table_fun = stub_writer
+  )
+  expect_false("charts_overview.html" %in% utils::unzip(z1, list = TRUE)$Name)
+
+  z2 <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z2, sample_matrix(), "waterfall",
+    filename_prefix = "bfly", templates_dir = templates_dir, write_table_fun = stub_writer,
+    asset_path = tempfile(fileext = ".png")  # doesn't exist
+  )
+  expect_false("charts_overview.html" %in% utils::unzip(z2, list = TRUE)$Name)
+})
+
 test_that("supported chart without think-cell ships template + ppttc fallback", {
   skip_if_not(have_templates, "templates directory not available")
   z <- tempfile(fileext = ".zip")

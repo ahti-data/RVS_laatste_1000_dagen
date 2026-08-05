@@ -262,7 +262,7 @@ test_that("export_history_regenerate_entry uses the live build function when the
     session <- fake_session()
     build_calls <- 0
     tc_chart_registry_register(session, "live_chart_dl", list(
-      build_zip = function(zip_path) {
+      build_zip = function(zip_path, favorite_download_id = NULL, captured_image = NULL) {
         build_calls <<- build_calls + 1
         writeLines("live content", zip_path)
       },
@@ -513,5 +513,178 @@ test_that("export_history_regenerate_excel_many with 2+ entries zips one xlsx pe
     expect_true(any(grepl("^cost_chart_thinkcell_.*\\.xlsx$", files)))
 
     expect_length(export_history_list(), 4)
+  })
+})
+
+# ---- Captured-PNG asset helpers (§4: single-chart charts_overview.html) ----
+
+test_that("export_history_asset_path is a sibling of export_history_dir", {
+  with_history_dir({
+    expect_equal(
+      normalizePath(dirname(export_history_asset_path("abc123")), winslash = "/", mustWork = FALSE),
+      normalizePath(export_history_assets_dir(), winslash = "/", mustWork = FALSE)
+    )
+    expect_equal(basename(export_history_asset_path("abc123")), "abc123.png")
+  })
+})
+
+test_that("tc_write_captured_asset / tc_read_asset_as_data_uri round-trip a PNG", {
+  with_history_dir({
+    path <- export_history_asset_path("exp_test1")
+    original <- as.raw(c(1, 2, 3, 255, 0))
+    uri_in <- paste0("data:image/png;base64,", jsonlite::base64_enc(original))
+
+    expect_true(tc_write_captured_asset(uri_in, path))
+    expect_true(file.exists(path))
+
+    uri_out <- tc_read_asset_as_data_uri(path)
+    expect_true(grepl("^data:image/png;base64,", uri_out))
+    roundtripped <- jsonlite::base64_dec(sub("^data:image/[^;]+;base64,", "", uri_out))
+    expect_equal(roundtripped, original)
+  })
+})
+
+test_that("tc_write_captured_asset is a no-op for NULL/empty/undecodable input", {
+  with_history_dir({
+    p1 <- export_history_asset_path("exp_null")
+    expect_false(tc_write_captured_asset(NULL, p1))
+    expect_false(file.exists(p1))
+
+    p2 <- export_history_asset_path("exp_empty")
+    expect_false(tc_write_captured_asset("", p2))
+    expect_false(file.exists(p2))
+
+    p3 <- export_history_asset_path("exp_garbage")
+    expect_false(tc_write_captured_asset("data:image/png;base64,not-valid-base64!!!", p3))
+  })
+})
+
+test_that("tc_read_asset_as_data_uri returns NULL for a missing file", {
+  with_history_dir({
+    expect_null(tc_read_asset_as_data_uri(export_history_asset_path("never_written")))
+    expect_null(tc_read_asset_as_data_uri(NULL))
+  })
+})
+
+test_that("tc_copy_asset copies an existing snapshot to a new id, no-ops if the source is missing", {
+  with_history_dir({
+    tc_write_captured_asset(
+      paste0("data:image/png;base64,", jsonlite::base64_enc(as.raw(1:3))),
+      export_history_asset_path("exp_from")
+    )
+    expect_true(tc_copy_asset("exp_from", "exp_to"))
+    expect_true(file.exists(export_history_asset_path("exp_to")))
+
+    expect_false(tc_copy_asset("exp_never_existed", "exp_to2"))
+    expect_false(file.exists(export_history_asset_path("exp_to2")))
+  })
+})
+
+# ---- Regenerate/redownload threading a captured/stored asset through -----
+
+test_that("export_history_redownload includes the entry's own stored snapshot in the overview", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Revenue", filename_prefix = "revenue_chart",
+      templates_dir = templates_dir
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+    tc_write_captured_asset(
+      paste0("data:image/png;base64,", jsonlite::base64_enc(as.raw(1:3))),
+      export_history_asset_path(entry$id)
+    )
+
+    z <- tempfile(fileext = ".zip")
+    export_history_redownload(entry, z, templates_dir = templates_dir, ppttc_exe = NA)
+    files <- utils::unzip(z, list = TRUE)$Name
+    expect_true("charts_overview.html" %in% files)
+  })
+})
+
+test_that("export_history_regenerate_entry writes a fresh captured_image under the new chart_id", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Revenue", filename_prefix = "revenue_chart",
+      templates_dir = templates_dir, module_id = "live_chart_dl2"
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+
+    session <- fake_session()
+    tc_chart_registry_register(session, "live_chart_dl2", list(
+      build_zip = function(zip_path, favorite_download_id = NULL, captured_image = NULL) {
+        expect_true(grepl("^data:image/png;base64,", captured_image))
+        writeLines("live content", zip_path)
+      },
+      get_spec = function() stop("not used in this test")
+    ))
+
+    fresh_uri <- paste0("data:image/png;base64,", jsonlite::base64_enc(as.raw(9:11)))
+    z <- tempfile(fileext = ".zip")
+    res <- export_history_regenerate_entry(
+      entry, z, session, templates_dir = templates_dir, ppttc_exe = NA, captured_image = fresh_uri
+    )
+    expect_true(res$live)
+  })
+})
+
+test_that("export_history_regenerate_entry falls back to the old stored snapshot when no fresh capture is available", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Revenue", filename_prefix = "revenue_chart",
+      templates_dir = templates_dir, module_id = "not_registered_this_time"
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+    tc_write_captured_asset(
+      paste0("data:image/png;base64,", jsonlite::base64_enc(as.raw(1:3))),
+      export_history_asset_path(entry$id)
+    )
+
+    z <- tempfile(fileext = ".zip")
+    res <- export_history_regenerate_entry(entry, z, fake_session(), templates_dir = templates_dir, ppttc_exe = NA)
+    expect_false(res$live)
+
+    history <- export_history_list()
+    new_id <- Filter(function(e) !identical(e$id, entry$id), history)[[1]]$id
+    expect_true(file.exists(export_history_asset_path(new_id)))
+  })
+})
+
+test_that("export_history_regenerate_many threads captures by module_id through to a solo regenerate", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", dashboard_title = "D",
+      tab_label = "T", subtab_label = "Revenue", filename_prefix = "revenue_chart",
+      templates_dir = templates_dir, module_id = "live_chart_dl3"
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+
+    session <- fake_session()
+    seen_image <- NULL
+    tc_chart_registry_register(session, "live_chart_dl3", list(
+      build_zip = function(zip_path, favorite_download_id = NULL, captured_image = NULL) {
+        seen_image <<- captured_image
+        writeLines("live content", zip_path)
+      },
+      get_spec = function() stop("not used in this test")
+    ))
+
+    fresh_uri <- paste0("data:image/png;base64,", jsonlite::base64_enc(as.raw(1:3)))
+    z <- tempfile(fileext = ".zip")
+    export_history_regenerate_many(
+      list(entry), z, session, templates_dir = templates_dir, ppttc_exe = NA,
+      captures = setNames(list(fresh_uri), "live_chart_dl3")
+    )
+    expect_equal(seen_image, fresh_uri)
   })
 })

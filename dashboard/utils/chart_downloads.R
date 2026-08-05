@@ -123,6 +123,97 @@ TC_TEMPLATE_PICKER_CSS <- r"(
 .tc-slide-template .selectize-dropdown { width: auto; min-width: 100%; }
 )"
 
+#' Client-side PNG snapshot for "Download slide" and Export History's
+#' "Regenerate selected", so their ZIPs can include a `charts_overview.html`
+#' the same way a bulk favorites download already does (see
+#' `tc_build_charts_overview_html()` in `utils/favorites.R`) -- generalizes
+#' [TC_FAVORITE_CAPTURE_JS]'s underlying capture primitive to two more
+#' trigger points, rather than only the favorite star button.
+#'
+#' Both `downloadButton`s this replaces become a plain `actionButton` (class
+#' `tc-slide-go-btn` / `tc-regenerate-go-btn`) paired with a hidden *real*
+#' `downloadButton` that the client clicks programmatically once it has
+#' either captured a screenshot or given up waiting -- a real download can't
+#' pause mid-flight for a screenshot, so the screenshot has to arrive
+#' *before* the browser ever requests the file. A capture that fails, times
+#' out, or has no Plotly widget to capture in the first place still lets the
+#' download through (with `image: null`) -- a missing snapshot only means
+#' that chart's overview page is absent from the ZIP, never a broken export.
+#'
+#' `tc-slide-go-btn` (one chart, e.g. `plot_basispopulatie`) reads its own
+#' `data-plot-output-id` directly. `tc-regenerate-go-btn` (Export History's
+#' bottom banner, spanning an arbitrary multi-chart selection) instead reads
+#' a JSON-encoded `data-module-ids` list (refreshed by the server whenever
+#' the selection changes) and looks each one up via `data-module-id` on
+#' whichever chart panel(s) happen to be rendered right now -- a chart
+#' outside the current tab/session simply isn't found, which is exactly the
+#' same "not live" case the underlying data regenerate already falls back
+#' from.
+TC_CHART_CAPTURE_JS <- r"(
+if (!window.__tcChartCaptureInit) {
+  window.__tcChartCaptureInit = true;
+
+  function __tcFindPlotlyDiv(outputId) {
+    var el = outputId ? document.getElementById(outputId) : null;
+    if (!el) return null;
+    if (el.classList && el.classList.contains('js-plotly-plot')) return el;
+    return el.querySelector('.js-plotly-plot');
+  }
+
+  function __tcFindPlotlyDivByModule(moduleId) {
+    var wrap = document.querySelector('[data-module-id="' + moduleId + '"][data-plot-output-id]');
+    if (!wrap) return null;
+    return __tcFindPlotlyDiv(wrap.getAttribute('data-plot-output-id'));
+  }
+
+  function __tcCapturePng(gd) {
+    if (!gd || typeof Plotly === 'undefined') return Promise.resolve(null);
+    var w = (gd._fullLayout && gd._fullLayout.width) || 900;
+    var h = (gd._fullLayout && gd._fullLayout.height) || 550;
+    return Plotly.toImage(gd, {format: 'png', width: w, height: h}).catch(function() { return null; });
+  }
+
+  $(document).on('click', '.tc-slide-go-btn', function() {
+    var $btn = $(this);
+    var done = false;
+    function finish(dataUrl) {
+      if (done) return;
+      done = true;
+      Shiny.setInputValue($btn.data('capture-input-id'), {image: dataUrl || null, nonce: Math.random()}, {priority: 'event'});
+    }
+    __tcCapturePng(__tcFindPlotlyDiv($btn.attr('data-plot-output-id'))).then(finish);
+    setTimeout(function() { finish(null); }, 2000);
+  });
+
+  $(document).on('click', '.tc-regenerate-go-btn', function() {
+    var $btn = $(this);
+    var moduleIds = [];
+    try { moduleIds = JSON.parse($btn.attr('data-module-ids') || '[]'); } catch (e) {}
+    var captures = {};
+    var done = false;
+    function finish() {
+      if (done) return;
+      done = true;
+      Shiny.setInputValue($btn.data('capture-input-id'), {captures: captures, nonce: Math.random()}, {priority: 'event'});
+    }
+    var promises = moduleIds.map(function(mid) {
+      return __tcCapturePng(__tcFindPlotlyDivByModule(mid)).then(function(dataUrl) {
+        if (dataUrl) captures[mid] = dataUrl;
+      });
+    });
+    Promise.all(promises).then(finish);
+    setTimeout(finish, 3000);
+  });
+
+  $(document).on('shiny:connected', function() {
+    Shiny.addCustomMessageHandler('tc_trigger_download', function(msg) {
+      var el = document.getElementById(msg.download_id);
+      if (el) el.click();
+    });
+  });
+}
+)"
+
 #' UI for raw and think-cell chart data downloads.
 #'
 #' The think-cell button is only shown when `chart_type` is supported.
@@ -191,7 +282,17 @@ chart_data_downloads_ui <- function(
   if (show_slide) {
     buttons <- c(
       buttons,
-      list(shiny::downloadButton(ns("slide"), slide_label, class = "btn-primary"))
+      list(
+        shiny::actionButton(
+          ns("slide_go"), slide_label, class = "btn-primary tc-slide-go-btn",
+          `data-plot-output-id` = plot_output_id,
+          `data-capture-input-id` = ns("slide_capture")
+        ),
+        shiny::tags$span(
+          style = "display:none;",
+          shiny::downloadButton(ns("slide"), "")
+        )
+      )
     )
     slide_extra <- shiny::tagList(
       shiny::div(
@@ -226,6 +327,7 @@ chart_data_downloads_ui <- function(
         shiny::uiOutput(ns("slide_template_info")),
         shiny::tags$div(
           `data-plot-output-id` = plot_output_id,
+          `data-module-id` = id,
           shiny::actionButton(ns("favorite"), favorite_label,
                               class = "btn-default tc-favorite-btn",
                               style = "margin-top:8px;"),
@@ -233,6 +335,7 @@ chart_data_downloads_ui <- function(
         ),
         shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS)),
         shiny::tags$script(shiny::HTML(TC_TEMPLATE_PICKER_JS)),
+        shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS)),
         shiny::tags$style(shiny::HTML(TC_TEMPLATE_PICKER_CSS))
       )
     )
@@ -564,9 +667,27 @@ chart_data_downloads_server <- function(
         )
       }
 
+      # Set by the tc_slide_capture observer below, just before it triggers
+      # the real (hidden) download -- so by the time build_export_now() runs
+      # (synchronously, inside the downloadHandler content() the trigger
+      # fires), any client-side screenshot has already arrived. NULL if the
+      # capture failed, timed out, or this chart has no plot_output_id --
+      # build_export_now() treats that exactly like "no image available".
+      pending_slide_capture <- shiny::reactiveVal(NULL)
+
       # Builds this chart's slide ZIP from a freshly-derived spec and logs it
-      # to Export History. Used by the "Download slide" button below.
-      build_export_now <- function(zip_path, favorite_download_id = NULL) {
+      # to Export History. Used by the "Download slide" button below, and
+      # (via the chart registry's build_zip) by Export History's own
+      # "Regenerate selected" -- which supplies its own `captured_image`
+      # (this session's bulk-capture round, or a copy of the entry's last
+      # stored snapshot -- see `export_history_regenerate_entry()`) rather
+      # than whatever this chart's own button last captured, since the two
+      # capture rounds are entirely independent. `missing()`, not a `NULL`
+      # default, distinguishes "not supplied" (this chart's own button,
+      # which should use its own `pending_slide_capture()`) from "supplied,
+      # but no image" (Export History's round found nothing to use either).
+      build_export_now <- function(zip_path, favorite_download_id = NULL, captured_image) {
+        image_to_use <- if (missing(captured_image)) pending_slide_capture() else captured_image
         spec <- build_export_spec()
 
         # Auto-log this export to the shared Export history tab (see
@@ -576,6 +697,7 @@ chart_data_downloads_server <- function(
         # for faceted charts (tc_data is a per-facet list there), same scope
         # limitation favorites_capture() has today.
         chart_id <- NULL
+        asset_path <- NULL
         if (!spec$is_faceted) {
           history_entry <- tc_history_capture(
             tc_data           = spec$tc_data,
@@ -598,6 +720,8 @@ chart_data_downloads_server <- function(
           )
           history_entry$id <- export_history_new_id()
           chart_id <- export_history_add(history_entry)
+          asset_path <- export_history_asset_path(chart_id)
+          tc_write_captured_asset(image_to_use, asset_path)
         }
 
         tc_build_slide_zip(
@@ -618,7 +742,9 @@ chart_data_downloads_server <- function(
           template_override = spec$template_override,
           slide_order       = spec$slide_order,
           chart_id          = chart_id,
-          favorite_download_id = favorite_download_id
+          favorite_download_id = favorite_download_id,
+          asset_path        = asset_path,
+          asset_label       = tc_or(spec$figure_title, tc_or(spec$slide_title, spec$filename_prefix))
         )
         invisible(chart_id)
       }
@@ -642,6 +768,22 @@ chart_data_downloads_server <- function(
           build_export_now(file)
         }
       )
+      # This download link lives inside a `display:none` wrapper (see
+      # chart_data_downloads_ui()) -- Shiny suspends any output bound to a
+      # hidden element by default, which would otherwise leave its href
+      # permanently empty/disabled and the button's own click would never
+      # actually trigger a download.
+      shiny::outputOptions(output, "slide", suspendWhenHidden = FALSE)
+
+      # Written by TC_CHART_CAPTURE_JS's ".tc-slide-go-btn" click handler,
+      # either with a real screenshot or `image: NULL` (capture failed,
+      # timed out, or no plot_output_id was wired) -- either way, this is the
+      # signal to finally trigger the real (hidden) download, exactly once
+      # per click.
+      shiny::observeEvent(input$slide_capture, {
+        pending_slide_capture(input$slide_capture$image)
+        session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("slide")))
+      }, ignoreInit = TRUE)
 
       favorite_status_rv <- shiny::reactiveVal(NULL)
 
@@ -689,13 +831,8 @@ chart_data_downloads_server <- function(
       shiny::observeEvent(input$png_capture, {
         payload <- input$png_capture
         fav_id  <- payload$fav_id
-        image   <- payload$image
-        if (is.null(fav_id) || is.null(image) || !nzchar(fav_id)) return()
-        b64   <- sub("^data:image/[^;]+;base64,", "", image)
-        bytes <- tryCatch(jsonlite::base64_dec(b64), error = function(e) NULL)
-        if (is.null(bytes)) return()
-        dir.create(favorites_assets_dir(), recursive = TRUE, showWarnings = FALSE)
-        writeBin(bytes, favorite_asset_path(fav_id))
+        if (is.null(fav_id) || !nzchar(fav_id)) return()
+        tc_write_captured_asset(payload$image, favorite_asset_path(fav_id))
       }, ignoreInit = TRUE)
 
       output$favorite_status <- shiny::renderUI({

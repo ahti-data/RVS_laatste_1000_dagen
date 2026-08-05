@@ -44,6 +44,56 @@ export_history_new_id <- function() {
   )
 }
 
+#' Directory holding every export's captured PNG snapshot -- sibling to
+#' `export_history_dir()`, same "state/ is runtime-only, never deployed"
+#' treatment as `favorites_assets_dir()`.
+export_history_assets_dir <- function() {
+  file.path(dirname(export_history_dir()), "export_history_assets")
+}
+
+#' Path an export's PNG snapshot would live at, whether or not it exists yet
+#' -- mirrors [favorite_asset_path()]. Used to embed a `charts_overview.html`
+#' (see [tc_build_charts_overview_html()] in `utils/favorites.R`) into every
+#' export's ZIP, not just a bulk favorites download's.
+#' @param id A history entry's own id.
+export_history_asset_path <- function(id) {
+  file.path(export_history_assets_dir(), paste0(id, ".png"))
+}
+
+#' Decode a `data:image/png;base64,...` URI (as sent by `TC_CHART_CAPTURE_JS`
+#' /`TC_FAVORITE_CAPTURE_JS`) and write it to `path`. A no-op -- not an error
+#' -- when `image` is `NULL`/empty or fails to decode, since a missing
+#' snapshot only means that chart's overview page is absent from the ZIP,
+#' never a broken export.
+#' @param image The data-URI string, or `NULL`.
+#' @param path Destination `.png` path (see [export_history_asset_path()]).
+tc_write_captured_asset <- function(image, path) {
+  if (is.null(image) || !nzchar(image)) return(invisible(FALSE))
+  b64   <- sub("^data:image/[^;]+;base64,", "", image)
+  bytes <- tryCatch(jsonlite::base64_dec(b64), error = function(e) NULL)
+  if (is.null(bytes) || length(bytes) == 0) return(invisible(FALSE))
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  writeBin(bytes, path)
+  invisible(TRUE)
+}
+
+#' The inverse of [tc_write_captured_asset()]: read an already-stored PNG
+#' back out as a `data:image/png;base64,...` URI, so it can be handed to
+#' [tc_write_captured_asset()] again under a *new* id -- used when a
+#' regenerate has no fresh capture to work with (module not registered this
+#' session, or the client-side capture round found nothing) but an older
+#' snapshot exists, so the regenerated entry's ZIP still gets an overview
+#' page rather than none at all.
+#' @param path A `.png` path (e.g. from [export_history_asset_path()] or
+#'   `favorite_asset_path()`).
+#' @return The data-URI string, or `NULL` if `path` doesn't exist/is unreadable.
+tc_read_asset_as_data_uri <- function(path) {
+  if (is.null(path) || !file.exists(path)) return(NULL)
+  bytes <- tryCatch(readBin(path, "raw", n = file.info(path)$size), error = function(e) NULL)
+  if (is.null(bytes) || length(bytes) == 0) return(NULL)
+  paste0("data:image/png;base64,", jsonlite::base64_enc(bytes))
+}
+
 #' Save a new history entry.
 #'
 #' @param entry List, typically the output of [tc_history_capture()]. If
@@ -207,7 +257,9 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
     ppttc_exe         = ppttc_exe,
     slide_order       = tc_or(entry$slide_order, "auto"),
     chart_id          = entry$id,
-    favorite_download_id = entry$favorite_download_id
+    favorite_download_id = entry$favorite_download_id,
+    asset_path        = export_history_asset_path(entry$id),
+    asset_label       = tc_or(entry$label, "chart")
   )
 }
 
@@ -220,16 +272,44 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
 # was pasted in.
 # ---------------------------------------------------------------------------
 
+#' Copy one entry's stored PNG snapshot to a new entry's asset path, if it
+#' exists. Used when a regenerate mints a fresh id but has no *new* capture
+#' to use for it (module not live this session, or the capture round found
+#' nothing) -- the regenerated entry's ZIP still gets an overview page,
+#' carried over from the entry it was regenerated from, rather than none.
+tc_copy_asset <- function(from_id, to_id) {
+  from <- export_history_asset_path(from_id)
+  if (!file.exists(from)) return(invisible(FALSE))
+  to <- export_history_asset_path(to_id)
+  dir.create(dirname(to), recursive = TRUE, showWarnings = FALSE)
+  file.copy(from, to, overwrite = TRUE)
+}
+
 #' Regenerate one history entry as a standalone ZIP (used for a solo
 #' regenerate) -- live, via the session's chart registry, when possible;
 #' otherwise an exact-snapshot rebuild, same as [export_history_redownload()]
 #' but under a brand-new id (a regenerate never reuses the pasted id).
+#' @param captured_image Optional data-URI from this session's bulk-capture
+#'   round (see `TC_CHART_CAPTURE_JS`'s `.tc-regenerate-go-btn` handler and
+#'   `export_history_regenerate_many()`) for this entry's own module, if one
+#'   was found/captured -- `NULL` when no fresh capture is available, in
+#'   which case the entry's last stored snapshot is reused instead (still
+#'   better than no image at all).
 #' @return `list(live = TRUE/FALSE)`, invisibly.
 export_history_regenerate_entry <- function(entry, zip_path, session,
-                                            templates_dir = NULL, ppttc_exe = NULL) {
+                                            templates_dir = NULL, ppttc_exe = NULL,
+                                            captured_image = NULL) {
   reg <- tc_chart_registry_get(session, tc_or(entry$module_id, ""))
   if (!is.null(reg)) {
-    ok <- tryCatch({ reg$build_zip(zip_path); TRUE }, error = function(e) FALSE)
+    image_to_use <- if (!is.null(captured_image)) {
+      captured_image
+    } else {
+      tc_read_asset_as_data_uri(export_history_asset_path(entry$id))
+    }
+    ok <- tryCatch({
+      reg$build_zip(zip_path, captured_image = image_to_use)
+      TRUE
+    }, error = function(e) FALSE)
     if (ok) return(invisible(list(live = TRUE)))
   }
 
@@ -238,6 +318,7 @@ export_history_regenerate_entry <- function(entry, zip_path, session,
   new_entry$favorite_download_id <- NULL
   new_entry$created_at <- NULL
   export_history_add(new_entry)
+  tc_copy_asset(entry$id, new_entry$id)
   export_history_redownload(new_entry, zip_path, templates_dir = templates_dir, ppttc_exe = ppttc_exe)
   invisible(list(live = FALSE))
 }
@@ -248,9 +329,13 @@ export_history_regenerate_entry <- function(entry, zip_path, session,
 #' entry's own frozen snapshot. Either way, mints a fresh `download_id`,
 #' tags it with `favorite_download_id`/`created_at` (the bulk regenerate's
 #' shared batch values), and logs a brand-new history entry.
+#' @param captured_image Optional data-URI from this session's bulk-capture
+#'   round for this entry's own module (see `export_history_regenerate_many()`);
+#'   `NULL` falls back to a copy of the entry's last stored snapshot.
 #' @return `list(live = TRUE/FALSE, spec = list(...))`.
 export_history_prepare_regenerate_spec <- function(entry, session, favorite_download_id = NULL,
-                                                    created_at = NULL, templates_dir = NULL) {
+                                                    created_at = NULL, templates_dir = NULL,
+                                                    captured_image = NULL) {
   reg <- tc_chart_registry_get(session, tc_or(entry$module_id, ""))
   live_spec <- NULL
   if (!is.null(reg)) {
@@ -302,6 +387,13 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
     )
     slide_matrix <- tc_or(live_spec$slide_matrix, live_spec$tc_data)
 
+    image_to_use <- if (!is.null(captured_image)) {
+      captured_image
+    } else {
+      tc_read_asset_as_data_uri(export_history_asset_path(entry$id))
+    }
+    tc_write_captured_asset(image_to_use, export_history_asset_path(download_id))
+
     return(list(live = TRUE, spec = list(
       label = label,
       tc_table = as.data.frame(slide_matrix, stringsAsFactors = FALSE, check.names = FALSE),
@@ -313,7 +405,7 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
       download_id = download_id,
       favorite_download_id = favorite_download_id,
       datasheet_log = datasheet_log,
-      asset_path = NULL
+      asset_path = export_history_asset_path(download_id)
     )))
   }
 
@@ -325,6 +417,7 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
   new_entry$favorite_download_id <- favorite_download_id
   new_entry$created_at <- created_at
   export_history_add(new_entry)
+  tc_copy_asset(entry$id, new_entry$id)
 
   tpl_path <- tc_template_for_chart_type(
     new_entry$chart_type, templates_dir = templates_dir,
@@ -355,7 +448,7 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
     download_id = new_entry$id,
     favorite_download_id = favorite_download_id,
     datasheet_log = datasheet_log,
-    asset_path = NULL
+    asset_path = export_history_asset_path(new_entry$id)
   ))
 }
 
@@ -398,7 +491,7 @@ export_history_snapshot_spec <- function(entry, templates_dir = NULL) {
     download_id       = entry$id,
     favorite_download_id = entry$favorite_download_id,
     datasheet_log     = datasheet_log,
-    asset_path        = NULL
+    asset_path        = export_history_asset_path(entry$id)
   )
 }
 
@@ -428,11 +521,18 @@ export_history_download_many <- function(entries, zip_path, ppttc_exe = NULL, te
 #' one deck via [tc_build_deck_from_specs()]. Every regenerate mints
 #' brand-new ids -- it never touches the entries passed in.
 #' @param entries List of history entries.
+#' @param captures Named list of data-URIs from this session's bulk-capture
+#'   round (see `TC_CHART_CAPTURE_JS`'s `.tc-regenerate-go-btn` handler),
+#'   keyed by `module_id` -- an entry whose `module_id` isn't a name in this
+#'   list simply has no fresh capture (falls back to its last stored
+#'   snapshot, same as a chart that isn't live this session at all).
 #' @return `list(live_count, total)`, invisibly.
-export_history_regenerate_many <- function(entries, zip_path, session, templates_dir = NULL, ppttc_exe = NULL) {
+export_history_regenerate_many <- function(entries, zip_path, session, templates_dir = NULL,
+                                           ppttc_exe = NULL, captures = list()) {
   if (length(entries) == 1) {
     res <- export_history_regenerate_entry(
-      entries[[1]], zip_path, session, templates_dir = templates_dir, ppttc_exe = ppttc_exe
+      entries[[1]], zip_path, session, templates_dir = templates_dir, ppttc_exe = ppttc_exe,
+      captured_image = captures[[tc_or(entries[[1]]$module_id, "")]]
     )
     return(invisible(list(live_count = if (isTRUE(res$live)) 1 else 0, total = 1)))
   }
@@ -442,7 +542,8 @@ export_history_regenerate_many <- function(entries, zip_path, session, templates
   prepared <- lapply(entries, function(e) {
     export_history_prepare_regenerate_spec(
       e, session, favorite_download_id = new_favorite_download_id,
-      created_at = batch_created_at, templates_dir = templates_dir
+      created_at = batch_created_at, templates_dir = templates_dir,
+      captured_image = captures[[tc_or(e$module_id, "")]]
     )
   })
   specs <- lapply(prepared, function(p) p$spec)
@@ -626,7 +727,8 @@ export_history_panel_ui <- function(id) {
     ),
     shiny::tags$hr(),
     shiny::uiOutput(ns("list")),
-    shiny::uiOutput(ns("selection_banner"))
+    shiny::uiOutput(ns("selection_banner")),
+    shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS))
   )
 }
 
@@ -905,9 +1007,17 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
           session$ns("download_selected"), "Redownload selected",
           class = "btn-default btn-sm"
         ),
-        shiny::downloadButton(
-          session$ns("regenerate_selected"), "Regenerate selected against today's data",
-          class = "btn-primary btn-sm"
+        shiny::actionButton(
+          session$ns("regenerate_selected_go"), "Regenerate selected against today's data",
+          class = "btn-primary btn-sm tc-regenerate-go-btn",
+          `data-module-ids` = jsonlite::toJSON(unique(Filter(
+            nzchar, vapply(entries, function(e) tc_or(e$module_id, ""), character(1))
+          ))),
+          `data-capture-input-id` = session$ns("regenerate_capture")
+        ),
+        shiny::tags$span(
+          style = "display:none;",
+          shiny::downloadButton(session$ns("regenerate_selected"), "")
         ),
         shiny::downloadButton(
           session$ns("regenerate_excel_selected"), "Regenerate Excel only (think-cell format)",
@@ -925,14 +1035,30 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       }
     )
 
+    # Set by TC_CHART_CAPTURE_JS's ".tc-regenerate-go-btn" click handler --
+    # a named list of data-URIs keyed by module_id, one per currently-mounted
+    # chart it managed to screenshot before giving up (see
+    # export_history_regenerate_many()'s `captures` param). Triggers the
+    # real (hidden) download once the client is done, whether or not it
+    # found anything to capture.
+    pending_regenerate_captures <- shiny::reactiveVal(list())
+    shiny::observeEvent(input$regenerate_capture, {
+      pending_regenerate_captures(tc_or(input$regenerate_capture$captures, list()))
+      session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("regenerate_selected")))
+    }, ignoreInit = TRUE)
+
     output$regenerate_selected <- shiny::downloadHandler(
       filename = function() paste0("export_history_selected_regenerated_", Sys.Date(), ".zip"),
       content = function(file) {
         entries <- selected_entries()
         shiny::req(length(entries) > 0)
-        export_history_regenerate_many(entries, file, session)
+        export_history_regenerate_many(entries, file, session, captures = pending_regenerate_captures())
       }
     )
+    # This download link lives inside a `display:none` wrapper (see
+    # output$selection_banner above) -- see the matching note in
+    # utils/chart_downloads.R's own output$slide for why this is required.
+    shiny::outputOptions(output, "regenerate_selected", suspendWhenHidden = FALSE)
 
     output$regenerate_excel_selected <- shiny::downloadHandler(
       filename = function() {
