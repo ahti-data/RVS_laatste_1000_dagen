@@ -3987,9 +3987,21 @@ server <- function(input, output, session) {
   it3_acp_export_data <- reactive({
     df <- it3_acp_pop_filtered()
     if (nrow(df) == 0) return(df)
+    df <- df |>
+      # Same stats::reorder() the plot itself uses (output$it3_plot_acp_pop's
+      # x = reorder(group_label, metric_value)) -- without this, the export
+      # never matched the chart's bar order, since group_label otherwise
+      # keeps whatever order it3_acp_pop_filtered() happened to return
+      # (effectively alphabetical).
+      dplyr::mutate(group_label = stats::reorder(group_label, metric_value)) |>
+      dplyr::arrange(group_label)
     df |>
       dplyr::transmute(
-        category = as.character(group_label),
+        # Kept as the ordered factor stats::reorder() produced (not
+        # as.character()) so prepare_tc_long_data() (utils/format_thinkcell_download.R)
+        # inherits this same order automatically via its own
+        # is.factor(df[[category_col]]) check, instead of only the row order.
+        category = group_label,
         series = as.character(died_label),
         export_value = metric_value
       )
@@ -4374,7 +4386,18 @@ server <- function(input, output, session) {
     } else {
       df <- df |> dplyr::mutate(series = as.character(died))
     }
-    df
+    df |>
+      # Same stats::reorder() the plot itself uses (output$plot_zorg_totaal's
+      # x = reorder(name, waarde)) -- without this, the export never matched
+      # the chart's bar order (it fell back to whatever order dplyr's own
+      # group_by(name, ...) %>% summarise() returns, i.e. alphabetical by
+      # name). Left as the ordered factor stats::reorder() produced (not
+      # as.character()) so prepare_tc_long_data()
+      # (utils/format_thinkcell_download.R) inherits this same order
+      # automatically via its own is.factor(df[[category_col]]) check, not
+      # just the row order.
+      dplyr::mutate(name = stats::reorder(name, waarde)) |>
+      dplyr::arrange(name)
   })
 
   chart_data_downloads_server(

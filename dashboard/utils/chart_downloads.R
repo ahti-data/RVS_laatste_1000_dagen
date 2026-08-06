@@ -470,6 +470,20 @@ chart_data_downloads_server <- function(
             facet_col = facet_col
           )
 
+          # Apply the "Category order" dropdown here too -- same
+          # tc_resolve_slide_matrix()/tc_reorder_by_categories() pattern
+          # tc_build_slide_zip() and export_history_regenerate_excel_one()
+          # already use, so this plain table download reads in the same
+          # order as the slide/table it's meant to match, not just whatever
+          # order format_tc_data() happened to produce. A faceted tc_data is
+          # a per-facet named list; derive the reference order from the
+          # first facet only, same scope tc_build_slide_zip() already has.
+          ordered_matrix <- tc_resolve_slide_matrix(
+            if (is_tc_workbook_list(tc_data)) tc_data[[1]] else tc_data,
+            resolved_chart_type, NULL, tc_or(input$slide_order, "auto")
+          )
+          tc_data <- tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
+
           # Same corner-cell provenance idea as the slide/favorites downloads
           # (see tc_build_ppttc_slide_block()), just stamped onto the plain
           # workbook's own header instead of a ppttc chart datasheet, since
