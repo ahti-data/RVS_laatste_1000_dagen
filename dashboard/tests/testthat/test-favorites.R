@@ -434,10 +434,16 @@ test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one"
     # think-cell pivoted matrix.
     expect_true(all(c("quarter", "product", "revenue") %in% names(raw)))
     expect_equal(nrow(raw), nrow(sample_df()))
+    # favorites_build_deck_zip() already has the *combined* workbooks above --
+    # it must not also duplicate each chart's own table/raw.xlsx (that's
+    # favorites_build_slides_zip()'s job, see tc_write_deck_files()'s
+    # include_tables).
+    expect_false("Revenue_table.xlsx" %in% files)
+    expect_false("Revenue_raw.xlsx" %in% files)
   })
 })
 
-test_that("favorites_build_slides_zip includes the deck but neither data workbook", {
+test_that("favorites_build_slides_zip includes the deck plus each chart's own table/raw xlsx, but no combined workbook", {
   skip_if_not(have_templates, "templates directory not available")
   with_history_dir({
     session <- fake_session()
@@ -450,6 +456,8 @@ test_that("favorites_build_slides_zip includes the deck but neither data workboo
     expect_false("favorites_thinkcell_tables.xlsx" %in% files)
     expect_false("favorites_raw_tables.xlsx" %in% files)
     expect_true(any(grepl("^favorites_deck", files)))
+    expect_true("Revenue_table.xlsx" %in% files)
+    expect_true("Revenue_raw.xlsx" %in% files)
 
     # Still logged to Export History, same as favorites_build_deck_zip().
     expect_length(export_history_list(), 1)

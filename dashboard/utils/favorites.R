@@ -310,21 +310,42 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
 #' Write the "slide" half of a combined favorites/export-history export --
 #' the captured-image overview page and either a rendered multi-slide
 #' `.pptx` or the graceful template+`.ppttc`+README fallback -- into an
-#' already-created `work` directory, with no data workbooks and no zip.
-#' Extracted out of [tc_build_deck_from_specs()] so [tc_build_slide_deck_zip()]
-#' (Favorites' "Download slides" button -- just this half, zipped on its
-#' own) can share it without duplicating the deck-building logic.
+#' already-created `work` directory, with no zip. Extracted out of
+#' [tc_build_deck_from_specs()] so [tc_build_slide_deck_zip()] (Favorites'
+#' "Download slides" button -- just this half, zipped on its own) can share
+#' it without duplicating the deck-building logic.
 #' @param specs Same shape as [tc_build_deck_from_specs()].
 #' @param work An already-created, writable directory.
 #' @param ppttc_exe Optional override for the think-cell executable.
+#' @param include_tables When `TRUE`, also write each spec's own
+#'   `<label>_table.xlsx` (and `<label>_raw.xlsx` when `raw_table` is
+#'   present) -- the same per-chart shape [tc_build_slide_zip()] ships for a
+#'   single chart. [tc_build_slide_deck_zip()] (Favorites' "Download
+#'   slides") wants this so that one zip has everything; the default `FALSE`
+#'   keeps [tc_build_deck_from_specs()] as-is, since it already writes its
+#'   own *combined*, cross-chart `favorites_thinkcell_tables.xlsx`/
+#'   `favorites_raw_tables.xlsx` before calling this.
 #' @return Invisible `NULL`.
-tc_write_deck_files <- function(specs, work, ppttc_exe = NULL) {
+tc_write_deck_files <- function(specs, work, ppttc_exe = NULL, include_tables = FALSE) {
   if (length(specs) == 0) {
     writeLines("No charts to include.", file.path(work, "README.txt"))
     return(invisible(NULL))
   }
 
   as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
+
+  if (include_tables) {
+    file_labels <- sanitize_excel_sheet_names(
+      vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
+    )
+    for (i in seq_along(specs)) {
+      s <- specs[[i]]
+      write_tc_xlsx(as_df(s$tc_table), file.path(work, paste0(file_labels[[i]], "_table.xlsx")))
+      if (!is.null(s$raw_table)) {
+        write_tc_xlsx(as_df(s$raw_table), file.path(work, paste0(file_labels[[i]], "_raw.xlsx")))
+      }
+    }
+  }
 
   # One page with every captured chart image in spec order, instead of N
   # loose chart_<label>.png files -- see tc_build_charts_overview_html().
@@ -390,12 +411,16 @@ tc_write_deck_files <- function(specs, work, ppttc_exe = NULL) {
   invisible(NULL)
 }
 
-#' Zip up just the "slide" half of a combined favorites/export-history
-#' export (see [tc_write_deck_files()]) -- no data workbooks. Used by
-#' Favorites' "Download slides" bulk button, one of three separate,
-#' consistently-named bulk downloads (mirroring a single chart's own
-#' raw/think-cell/slide split) that replaced one single combined
-#' "Download all favorites" click.
+#' Zip up the "slide" half of a combined favorites/export-history export
+#' (see [tc_write_deck_files()]), plus each chart's own `_table.xlsx`/
+#' `_raw.xlsx` -- so this single zip alone has everything a chart's own
+#' single "Download slide" button would give you, just for every favorite
+#' at once. Used by Favorites' "Download slides" bulk button, one of three
+#' separate, consistently-named bulk downloads (mirroring a single chart's
+#' own raw/think-cell/slide split) that replaced one single combined
+#' "Download all favorites" click -- the other two buttons additionally
+#' give a *combined*, cross-chart workbook (one sheet per favorite) for
+#' whichever format you only need in bulk.
 #' @param specs Same shape as [tc_build_deck_from_specs()].
 #' @param zip_path Output `.zip` path.
 #' @param ppttc_exe Optional override for the think-cell executable.
@@ -409,7 +434,7 @@ tc_build_slide_deck_zip <- function(specs, zip_path, ppttc_exe = NULL) {
     unlink(work, recursive = TRUE, force = TRUE)
   }, add = TRUE)
 
-  tc_write_deck_files(specs, work, ppttc_exe)
+  tc_write_deck_files(specs, work, ppttc_exe, include_tables = TRUE)
 
   files <- basename(list.files(work, full.names = TRUE))
   zip_path_abs <- normalizePath(zip_path, winslash = "/", mustWork = FALSE)
@@ -654,11 +679,13 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, session, ppttc_ex
   invisible(result$skipped)
 }
 
-#' Build just the slide-deck ZIP (no data workbooks) from every live
-#' favorite -- Favorites' "Download slides" bulk button, one of three
-#' separate, consistently-named bulk downloads (mirroring a single chart's
-#' own raw/think-cell/slide split). Still logged to Export History, same
-#' live-spec-building as [favorites_build_deck_zip()].
+#' Build the slide-deck ZIP -- deck + each chart's own `_table.xlsx`/
+#' `_raw.xlsx` (see [tc_write_deck_files()]'s `include_tables`), but no
+#' *combined* cross-chart workbook -- from every live favorite. Favorites'
+#' "Download slides" bulk button, one of three separate, consistently-named
+#' bulk downloads (mirroring a single chart's own raw/think-cell/slide
+#' split). Still logged to Export History, same live-spec-building as
+#' [favorites_build_deck_zip()].
 #' @inheritParams favorites_build_deck_zip
 #' @return Character vector of skipped favorites' labels (invisibly).
 favorites_build_slides_zip <- function(zip_path, entries = NULL, session, ppttc_exe = NULL,
