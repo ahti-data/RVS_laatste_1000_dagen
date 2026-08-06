@@ -87,13 +87,13 @@ if (!window.__tcTemplateModalInit) {
 #' clickable cards, each showing a full preview image and its file name, with
 #' a highlighted border on the currently-chosen one.
 TC_TEMPLATE_MODAL_CSS <- r"(
-.tc-template-grid { display:flex; flex-wrap:wrap; gap:12px; max-height:65vh; overflow-y:auto; padding:2px; }
-.tc-template-grid-item { cursor:pointer; border:2px solid #E4E7EE; border-radius:8px; padding:8px; width:220px; text-align:center; }
+.tc-template-grid { display:flex; flex-wrap:wrap; gap:16px; max-height:75vh; overflow-y:auto; padding:2px; }
+.tc-template-grid-item { cursor:pointer; border:2px solid #E4E7EE; border-radius:8px; padding:10px; width:440px; text-align:center; }
 .tc-template-grid-item:hover { border-color:#93C5FD; background:#F0F7FF; }
 .tc-template-grid-item-selected { border-color:#2563EB; background:#EFF6FF; }
-.tc-template-grid-item img { width:100%; height:124px; object-fit:contain; background:#fff; border:1px solid #E4E7EE; border-radius:4px; }
-.tc-template-grid-noimg { width:100%; height:124px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; font-size:12px; background:#F9FAFB; border:1px dashed #E4E7EE; border-radius:4px; }
-.tc-template-grid-label { margin-top:6px; font-size:13px; color:#374151; word-break:break-word; }
+.tc-template-grid-item img { width:100%; height:248px; object-fit:contain; background:#fff; border:1px solid #E4E7EE; border-radius:4px; }
+.tc-template-grid-noimg { width:100%; height:248px; display:flex; align-items:center; justify-content:center; color:#9CA3AF; font-size:12px; background:#F9FAFB; border:1px dashed #E4E7EE; border-radius:4px; }
+.tc-template-grid-label { margin-top:8px; font-size:14px; color:#374151; word-break:break-word; }
 )"
 
 #' Client-side PNG snapshot for "Download slide" and Export History's

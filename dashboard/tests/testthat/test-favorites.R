@@ -305,6 +305,94 @@ test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one"
   })
 })
 
+test_that("favorites_build_slides_zip includes the deck but neither data workbook", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- favorites_capture(
+      data = sample_df(), chart_type = "stacked_bar",
+      category_col = "quarter", series_col = "product", value_col = "revenue",
+      agg_fun = NULL, dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir
+    )
+    z <- tempfile(fileext = ".zip")
+    favorites_build_slides_zip(z, entries = list(entry), ppttc_exe = NA, templates_dir = templates_dir)
+    files <- utils::unzip(z, list = TRUE)$Name
+    expect_false("favorites_thinkcell_tables.xlsx" %in% files)
+    expect_false("favorites_raw_tables.xlsx" %in% files)
+    expect_true(any(grepl("^favorites_deck", files)))
+
+    # Still logged to Export History, same as favorites_build_deck_zip().
+    expect_length(export_history_list(), 1)
+  })
+})
+
+test_that("favorites_build_slides_zip with no favorites still produces a valid, explanatory ZIP", {
+  z <- tempfile(fileext = ".zip")
+  favorites_build_slides_zip(z, entries = list())
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("README.txt" %in% files)
+})
+
+test_that("favorites_build_thinkcell_xlsx writes a bare workbook, one sheet per favorite, not logged to history", {
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    e1 <- favorites_capture(
+      data = sample_df(), chart_type = "stacked_bar",
+      category_col = "quarter", series_col = "product", value_col = "revenue",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue"
+    )
+    e2 <- favorites_capture(
+      data = sample_df(), chart_type = "stacked_bar",
+      category_col = "quarter", series_col = "product", value_col = "revenue",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Cost"
+    )
+    path <- tempfile(fileext = ".xlsx")
+    favorites_build_thinkcell_xlsx(path, entries = list(e1, e2))
+
+    df <- readxl::excel_sheets(path)
+    expect_setequal(df, c("Revenue", "Cost"))
+    expect_length(export_history_list(), 0)
+  })
+})
+
+test_that("favorites_build_thinkcell_xlsx with no favorites still writes a valid workbook", {
+  path <- tempfile(fileext = ".xlsx")
+  favorites_build_thinkcell_xlsx(path, entries = list())
+  expect_true(file.exists(path))
+})
+
+test_that("favorites_build_raw_xlsx writes only favorites that have raw_table, not logged to history", {
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    e1 <- favorites_capture(
+      data = sample_df(), chart_type = "stacked_bar",
+      category_col = "quarter", series_col = "product", value_col = "revenue",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue"
+    )
+    e2 <- e1
+    e2$subtab_label <- "NoRaw"
+    e2$raw_table <- NULL
+
+    path <- tempfile(fileext = ".xlsx")
+    favorites_build_raw_xlsx(path, entries = list(e1, e2))
+
+    sheets <- readxl::excel_sheets(path)
+    expect_equal(sheets, "Revenue")
+    expect_length(export_history_list(), 0)
+  })
+})
+
+test_that("favorites_build_raw_xlsx with nothing to include still writes a valid workbook", {
+  path1 <- tempfile(fileext = ".xlsx")
+  favorites_build_raw_xlsx(path1, entries = list())
+  expect_true(file.exists(path1))
+
+  path2 <- tempfile(fileext = ".xlsx")
+  entry_no_raw <- list(label = "No raw", tc_table = sample_df(), raw_table = NULL)
+  favorites_build_raw_xlsx(path2, entries = list(entry_no_raw))
+  expect_true(file.exists(path2))
+})
+
 test_that("tc_build_charts_overview_html returns NA when no spec has a usable asset_path", {
   specs <- list(
     list(label = "A", asset_path = NULL),

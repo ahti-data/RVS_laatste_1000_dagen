@@ -350,14 +350,11 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
     unlink(work, recursive = TRUE, force = TRUE)
   }, add = TRUE)
 
-  if (length(specs) == 0) {
-    writeLines("No charts to include.", file.path(work, "README.txt"))
-  } else {
+  if (length(specs) > 0) {
+    as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
     labels <- sanitize_excel_sheet_names(
       vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
     )
-
-    as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
 
     sheets <- stats::setNames(lapply(specs, function(s) as_df(s$tc_table)), labels)
     write_tc_xlsx(sheets, file.path(work, "favorites_thinkcell_tables.xlsx"))
@@ -369,69 +366,9 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
       raw_sheets <- stats::setNames(lapply(specs[has_raw], function(s) as_df(s$raw_table)), labels[has_raw])
       write_tc_xlsx(raw_sheets, file.path(work, "favorites_raw_tables.xlsx"))
     }
-
-    # One page with every captured chart image in spec order, instead of N
-    # loose chart_<label>.png files -- see tc_build_charts_overview_html().
-    overview_html <- tc_build_charts_overview_html(specs)
-    if (!is.na(overview_html)) {
-      writeLines(overview_html, file.path(work, "charts_overview.html"), useBytes = TRUE)
-    }
-
-    renderable_idx <- which(vapply(specs, function(s) !is.na(tc_or(s$template_path, NA_character_)), logical(1)))
-    rendered <- FALSE
-
-    if (length(renderable_idx) > 0) {
-      render_blocks <- vapply(renderable_idx, function(i) {
-        s <- specs[[i]]
-        tc_build_ppttc_slide_block(
-          as_df(s$tc_table), tc_short_path(s$template_path),
-          tc_or(s$slide_title, ""), tc_or(s$figure_title, ""),
-          chart_id = s$download_id, datasheet_log = s$datasheet_log,
-          favorite_download_id = s$favorite_download_id
-        )
-      }, character(1))
-      ppttc_json <- sprintf("[%s]", paste(render_blocks, collapse = ","))
-      exe <- tc_or(ppttc_exe, tc_find_ppttc_exe())
-
-      if (!is.null(exe) && !is.na(exe) && nzchar(exe)) {
-        out_pptx <- file.path(work, "favorites_deck.pptx")
-        res <- tc_render_pptx_ppttc(ppttc_json, out_pptx, exe)
-        rendered <- isTRUE(res$ok)
-      }
-
-      if (!rendered) {
-        # Templates must be referenced by the bare file name copied alongside
-        # them (see the matching note in tc_build_slide_zip()) -- a server
-        # path resolved here is meaningless on whatever PC opens the bundle.
-        portable_blocks <- vapply(renderable_idx, function(i) {
-          s <- specs[[i]]
-          tc_build_ppttc_slide_block(
-            as_df(s$tc_table), basename(s$template_path),
-            tc_or(s$slide_title, ""), tc_or(s$figure_title, ""),
-            chart_id = s$download_id, datasheet_log = s$datasheet_log,
-            favorite_download_id = s$favorite_download_id
-          )
-        }, character(1))
-        portable_json <- sprintf("[%s]", paste(portable_blocks, collapse = ","))
-        writeLines(portable_json, file.path(work, "favorites_deck.ppttc"), useBytes = TRUE)
-        templates_used <- unique(vapply(specs[renderable_idx], function(s) s$template_path, character(1)))
-        for (tpl_path in templates_used) {
-          file.copy(tpl_path, file.path(work, basename(tpl_path)), overwrite = TRUE)
-        }
-        writeLines(paste0(
-          "think-cell was not available to render the combined deck automatically.\n",
-          "To finish it on a PC with PowerPoint + think-cell:\n\n",
-          "  ppttc favorites_deck.ppttc -o favorites_deck.pptx\n\n",
-          "(the template files referenced inside favorites_deck.ppttc are included alongside it)\n"
-        ), file.path(work, "README_render_deck.txt"), useBytes = TRUE)
-      }
-    } else {
-      writeLines(paste(
-        "None of these charts currently have a matching think-cell",
-        "template, so no deck could be built. The tables are still included."
-      ), file.path(work, "NO_TEMPLATE.txt"))
-    }
   }
+
+  tc_write_deck_files(specs, work, ppttc_exe)
 
   files <- basename(list.files(work, full.names = TRUE))
   zip_path_abs <- normalizePath(zip_path, winslash = "/", mustWork = FALSE)
@@ -441,25 +378,180 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
   invisible(zip_path_abs)
 }
 
-#' Build one combined ZIP from every saved favorite -- a thin wrapper around
-#' [tc_build_deck_from_specs()] that also auto-logs every renderable favorite
-#' to Export History (`utils/export_history.R`), all sharing one fresh
-#' `favorite_download_id` (see [favorites_download_new_id()]) so this whole
+#' Write the "slide" half of a combined favorites/export-history export --
+#' the captured-image overview page and either a rendered multi-slide
+#' `.pptx` or the graceful template+`.ppttc`+README fallback -- into an
+#' already-created `work` directory, with no data workbooks and no zip.
+#' Extracted out of [tc_build_deck_from_specs()] so [tc_build_slide_deck_zip()]
+#' (Favorites' "Download slides" button -- just this half, zipped on its
+#' own) can share it without duplicating the deck-building logic.
+#' @param specs Same shape as [tc_build_deck_from_specs()].
+#' @param work An already-created, writable directory.
+#' @param ppttc_exe Optional override for the think-cell executable.
+#' @return Invisible `NULL`.
+tc_write_deck_files <- function(specs, work, ppttc_exe = NULL) {
+  if (length(specs) == 0) {
+    writeLines("No charts to include.", file.path(work, "README.txt"))
+    return(invisible(NULL))
+  }
+
+  as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
+
+  # One page with every captured chart image in spec order, instead of N
+  # loose chart_<label>.png files -- see tc_build_charts_overview_html().
+  overview_html <- tc_build_charts_overview_html(specs)
+  if (!is.na(overview_html)) {
+    writeLines(overview_html, file.path(work, "charts_overview.html"), useBytes = TRUE)
+  }
+
+  renderable_idx <- which(vapply(specs, function(s) !is.na(tc_or(s$template_path, NA_character_)), logical(1)))
+  rendered <- FALSE
+
+  if (length(renderable_idx) > 0) {
+    render_blocks <- vapply(renderable_idx, function(i) {
+      s <- specs[[i]]
+      tc_build_ppttc_slide_block(
+        as_df(s$tc_table), tc_short_path(s$template_path),
+        tc_or(s$slide_title, ""), tc_or(s$figure_title, ""),
+        chart_id = s$download_id, datasheet_log = s$datasheet_log,
+        favorite_download_id = s$favorite_download_id
+      )
+    }, character(1))
+    ppttc_json <- sprintf("[%s]", paste(render_blocks, collapse = ","))
+    exe <- tc_or(ppttc_exe, tc_find_ppttc_exe())
+
+    if (!is.null(exe) && !is.na(exe) && nzchar(exe)) {
+      out_pptx <- file.path(work, "favorites_deck.pptx")
+      res <- tc_render_pptx_ppttc(ppttc_json, out_pptx, exe)
+      rendered <- isTRUE(res$ok)
+    }
+
+    if (!rendered) {
+      # Templates must be referenced by the bare file name copied alongside
+      # them (see the matching note in tc_build_slide_zip()) -- a server
+      # path resolved here is meaningless on whatever PC opens the bundle.
+      portable_blocks <- vapply(renderable_idx, function(i) {
+        s <- specs[[i]]
+        tc_build_ppttc_slide_block(
+          as_df(s$tc_table), basename(s$template_path),
+          tc_or(s$slide_title, ""), tc_or(s$figure_title, ""),
+          chart_id = s$download_id, datasheet_log = s$datasheet_log,
+          favorite_download_id = s$favorite_download_id
+        )
+      }, character(1))
+      portable_json <- sprintf("[%s]", paste(portable_blocks, collapse = ","))
+      writeLines(portable_json, file.path(work, "favorites_deck.ppttc"), useBytes = TRUE)
+      templates_used <- unique(vapply(specs[renderable_idx], function(s) s$template_path, character(1)))
+      for (tpl_path in templates_used) {
+        file.copy(tpl_path, file.path(work, basename(tpl_path)), overwrite = TRUE)
+      }
+      writeLines(paste0(
+        "think-cell was not available to render the combined deck automatically.\n",
+        "To finish it on a PC with PowerPoint + think-cell:\n\n",
+        "  ppttc favorites_deck.ppttc -o favorites_deck.pptx\n\n",
+        "(the template files referenced inside favorites_deck.ppttc are included alongside it)\n"
+      ), file.path(work, "README_render_deck.txt"), useBytes = TRUE)
+    }
+  } else {
+    writeLines(paste(
+      "None of these charts currently have a matching think-cell",
+      "template, so no deck could be built. The tables are still included."
+    ), file.path(work, "NO_TEMPLATE.txt"))
+  }
+  invisible(NULL)
+}
+
+#' Zip up just the "slide" half of a combined favorites/export-history
+#' export (see [tc_write_deck_files()]) -- no data workbooks. Used by
+#' Favorites' "Download slides" bulk button, one of three separate,
+#' consistently-named bulk downloads (mirroring a single chart's own
+#' raw/think-cell/slide split) that replaced one single combined
+#' "Download all favorites" click.
+#' @param specs Same shape as [tc_build_deck_from_specs()].
+#' @param zip_path Output `.zip` path.
+#' @param ppttc_exe Optional override for the think-cell executable.
+#' @return `zip_path`, invisibly.
+tc_build_slide_deck_zip <- function(specs, zip_path, ppttc_exe = NULL) {
+  work <- tempfile("tc_deck_slides_")
+  dir.create(work)
+  old_wd <- getwd()
+  on.exit({
+    setwd(old_wd)
+    unlink(work, recursive = TRUE, force = TRUE)
+  }, add = TRUE)
+
+  tc_write_deck_files(specs, work, ppttc_exe)
+
+  files <- basename(list.files(work, full.names = TRUE))
+  zip_path_abs <- normalizePath(zip_path, winslash = "/", mustWork = FALSE)
+  setwd(work)
+  utils::zip(zipfile = zip_path_abs, files = files, flags = "-q -X")
+
+  invisible(zip_path_abs)
+}
+
+#' Write just the think-cell-shaped combined workbook for a list of specs --
+#' one sheet per spec -- with no deck, no overview, no zip wrapper (a bare
+#' `.xlsx`). Used by Favorites' "Download Excel data (think-cell formatted)"
+#' bulk button -- unlike "Download slides", this one isn't logged to Export
+#' History, matching the single-chart "Download data (think-cell)" button's
+#' own convention (only a *slide* download is audited).
+#' @param specs List of `list(label, tc_table)`.
+#' @param path Output `.xlsx` path.
+#' @return `path`, invisibly.
+tc_build_thinkcell_xlsx_from_specs <- function(specs, path) {
+  as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
+  if (length(specs) == 0) {
+    write_tc_xlsx(data.frame(note = "No charts to include."), path)
+    return(invisible(path))
+  }
+  labels <- sanitize_excel_sheet_names(vapply(specs, function(s) tc_or(s$label, "chart"), character(1)))
+  sheets <- stats::setNames(lapply(specs, function(s) as_df(s$tc_table)), labels)
+  write_tc_xlsx(sheets, path)
+  invisible(path)
+}
+
+#' Write just the raw-data combined workbook for a list of specs -- one
+#' sheet per spec that has one, silently skipping any that don't -- with no
+#' deck, no overview, no zip wrapper (a bare `.xlsx`). Used by Favorites'
+#' "Download Excel data (raw)" bulk button; not logged to Export History,
+#' same reasoning as [tc_build_thinkcell_xlsx_from_specs()].
+#' @param specs List of `list(label, raw_table = NULL)`.
+#' @param path Output `.xlsx` path.
+#' @return `path`, invisibly.
+tc_build_raw_xlsx_from_specs <- function(specs, path) {
+  as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
+  has_raw <- vapply(specs, function(s) !is.null(s$raw_table), logical(1))
+  if (length(specs) == 0 || !any(has_raw)) {
+    write_tc_xlsx(data.frame(note = "No raw data to include."), path)
+    return(invisible(path))
+  }
+  labels <- sanitize_excel_sheet_names(vapply(specs, function(s) tc_or(s$label, "chart"), character(1)))
+  raw_sheets <- stats::setNames(lapply(specs[has_raw], function(s) as_df(s$raw_table)), labels[has_raw])
+  write_tc_xlsx(raw_sheets, path)
+  invisible(path)
+}
+
+#' Build the rich, [tc_build_deck_from_specs()]-shaped spec list for every
+#' saved favorite, auto-logging each renderable one to Export History
+#' (`utils/export_history.R`) along the way -- all sharing one fresh
+#' `favorite_download_id` (see [favorites_download_new_id()]) so a whole
 #' click can be found and regenerated together later, and one fresh
 #' `download_id` each -- the same as the single-chart "Download slide"
 #' button (favorite content never changes after starring, so there's no
 #' staleness risk in always minting fresh ids rather than reusing one).
-#'
-#' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
+#' Shared by [favorites_build_deck_zip()] ("Download slides") and, since
+#' its own bulk downloads want the *same* rich specs, would be reused by
+#' any future favorites bulk action that also needs history logging --
+#' [favorites_build_raw_xlsx()]/[favorites_build_thinkcell_xlsx()]
+#' deliberately build their own much simpler specs instead, since neither
+#' is logged to Export History (see their own docs for why).
 #' @param entries Favorites to include; defaults to every saved favorite.
-#' @param ppttc_exe Optional override for the think-cell executable.
 #' @param templates_dir Optional templates directory override (mainly for tests).
-favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL, templates_dir = NULL) {
+#' @return List of specs, possibly empty.
+favorites_build_specs_with_history <- function(entries = NULL, templates_dir = NULL) {
   entries <- tc_or(entries, favorites_list())
-
-  if (length(entries) == 0) {
-    return(tc_build_deck_from_specs(list(), zip_path, ppttc_exe))
-  }
+  if (length(entries) == 0) return(list())
 
   favorite_download_id <- favorites_download_new_id()
   # One shared timestamp for every entry logged from this click, rather than
@@ -471,7 +563,7 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
     vapply(entries, function(e) tc_or(e$label, "favorite"), character(1))
   )
 
-  specs <- lapply(seq_along(entries), function(i) {
+  lapply(seq_along(entries), function(i) {
     e <- entries[[i]]
     tpl_path <- tc_template_for_chart_type(
       e$chart_type, templates_dir = templates_dir, override = tc_or(e$template_name, "")
@@ -531,8 +623,65 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL,
       asset_path = if (!is.null(e$id) && nzchar(tc_or(e$id, ""))) favorite_asset_path(e$id) else NULL
     )
   })
+}
 
+#' Build one combined ZIP (data + slide deck) from every saved favorite --
+#' see [favorites_build_specs_with_history()] for the history-logging spec
+#' this feeds [tc_build_deck_from_specs()].
+#' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
+#' @param entries Favorites to include; defaults to every saved favorite.
+#' @param ppttc_exe Optional override for the think-cell executable.
+#' @param templates_dir Optional templates directory override (mainly for tests).
+favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL, templates_dir = NULL) {
+  specs <- favorites_build_specs_with_history(entries, templates_dir)
   tc_build_deck_from_specs(specs, zip_path, ppttc_exe)
+}
+
+#' Build just the slide-deck ZIP (no data workbooks) from every saved
+#' favorite -- Favorites' "Download slides" bulk button, one of three
+#' separate, consistently-named bulk downloads (mirroring a single chart's
+#' own raw/think-cell/slide split) that replaced one single combined
+#' "Download all favorites" click. Still logged to Export History, same
+#' history-logging spec as [favorites_build_deck_zip()].
+#' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
+#' @param entries Favorites to include; defaults to every saved favorite.
+#' @param ppttc_exe Optional override for the think-cell executable.
+#' @param templates_dir Optional templates directory override (mainly for tests).
+favorites_build_slides_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL, templates_dir = NULL) {
+  specs <- favorites_build_specs_with_history(entries, templates_dir)
+  tc_build_slide_deck_zip(specs, zip_path, ppttc_exe)
+}
+
+#' Build the combined think-cell-shaped workbook (bare `.xlsx`, no zip) for
+#' every saved favorite -- Favorites' "Download Excel data (think-cell
+#' formatted)" bulk button. Not logged to Export History (see
+#' [tc_build_thinkcell_xlsx_from_specs()] for why) -- deliberately builds a
+#' much simpler spec than [favorites_build_specs_with_history()] since none
+#' of that function's template-resolution/history-logging work is needed
+#' just to write a table.
+#' @param path Output `.xlsx` path (the `file` handed in by downloadHandler).
+#' @param entries Favorites to include; defaults to every saved favorite.
+favorites_build_thinkcell_xlsx <- function(path, entries = NULL) {
+  entries <- tc_or(entries, favorites_list())
+  specs <- lapply(entries, function(e) list(
+    label = tc_or(e$label, "favorite"),
+    tc_table = favorites_table_as_df(e$tc_table)
+  ))
+  tc_build_thinkcell_xlsx_from_specs(specs, path)
+}
+
+#' Build the combined raw-data workbook (bare `.xlsx`, no zip) for every
+#' saved favorite -- Favorites' "Download Excel data (raw)" bulk button. Not
+#' logged to Export History, same reasoning as [favorites_build_thinkcell_xlsx()].
+#' @param path Output `.xlsx` path (the `file` handed in by downloadHandler).
+#' @param entries Favorites to include; defaults to every saved favorite.
+favorites_build_raw_xlsx <- function(path, entries = NULL) {
+  entries <- tc_or(entries, favorites_list())
+  specs <- lapply(entries, function(e) list(
+    label = tc_or(e$label, "favorite"),
+    raw_table = if (!is.null(e$raw_table)) favorites_table_as_df(e$raw_table) else NULL
+  ))
+  tc_build_raw_xlsx_from_specs(specs, path)
 }
 
 #' Compact, single-line rendering of a favorite's option selections for the
@@ -578,7 +727,9 @@ favorites_panel_ui <- function(id, intro = NULL) {
         "a snapshot of its current export here."
       )
     )),
-    shiny::downloadButton(ns("download_all"), "Download all favorites", class = "btn-primary"),
+    shiny::downloadButton(ns("download_all_raw"), "Download Excel data (raw)", class = "btn-default"),
+    shiny::downloadButton(ns("download_all_thinkcell"), "Download Excel data (think-cell formatted)", class = "btn-primary"),
+    shiny::downloadButton(ns("download_all_slides"), "Download slides", class = "btn-primary"),
     shiny::actionButton(ns("remove_all"), "Remove all", class = "btn-default"),
     shiny::tags$hr(),
     shiny::uiOutput(ns("list"))
@@ -671,10 +822,24 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
       })
     })
 
-    output$download_all <- shiny::downloadHandler(
-      filename = function() paste0("favorites_deck_", Sys.Date(), ".zip"),
+    output$download_all_raw <- shiny::downloadHandler(
+      filename = function() paste0("favorites_raw_", Sys.Date(), ".xlsx"),
       content = function(file) {
-        favorites_build_deck_zip(file, entries = entries_reactive())
+        favorites_build_raw_xlsx(file, entries = entries_reactive())
+      }
+    )
+
+    output$download_all_thinkcell <- shiny::downloadHandler(
+      filename = function() paste0("favorites_thinkcell_", Sys.Date(), ".xlsx"),
+      content = function(file) {
+        favorites_build_thinkcell_xlsx(file, entries = entries_reactive())
+      }
+    )
+
+    output$download_all_slides <- shiny::downloadHandler(
+      filename = function() paste0("favorites_slides_", Sys.Date(), ".zip"),
+      content = function(file) {
+        favorites_build_slides_zip(file, entries = entries_reactive())
       }
     )
 

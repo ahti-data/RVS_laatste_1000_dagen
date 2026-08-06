@@ -108,6 +108,7 @@ source_util("utils/template_admin.R")
 source_util("utils/favorites.R")
 source_util("utils/export_history.R")
 source_util("utils/chart_downloads.R")
+source_util("utils/tab_theme.R")
 source_util("data/metadata/brand_colors.R")
 
 demographic_cols_iteration2 <- c(
@@ -1931,6 +1932,7 @@ get_all_interventie_names <- function() {
 ui <- navbarPage(
   title = "Laatste 1000 dagen",
   id = "main_nav",
+  header = tc_tab_color_theme(ahti_branding),
 
   tabPanel(
     "Iteratie 1",
