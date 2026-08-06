@@ -108,8 +108,14 @@ source_util("utils/template_admin.R")
 source_util("utils/favorites.R")
 source_util("utils/export_history.R")
 source_util("utils/chart_downloads.R")
+source_util("utils/dictionary.R")
+source_util("utils/dictionary_admin.R")
 source_util("utils/tab_theme.R")
 source_util("data/metadata/brand_colors.R")
+# Must load after utils/dictionary.R so its dictionary_seed_entries()
+# override (real raw->pretty rows, mined from this file's own pretty_*()
+# tables below) replaces the template's empty default.
+source_util("data/metadata/dictionary_seed.R")
 
 demographic_cols_iteration2 <- c(
   "doodsoorzaak",
@@ -131,7 +137,7 @@ pretty_default_iteration2 <- function(x) {
     stringr::str_to_title()
 }
 
-pretty_sheet <- function(x) {
+pretty_sheet_default <- function(x) {
   dplyr::recode(
     x,
     top_20_codes_operatie_1000 = "Top operatieproducten | 1000 dagen",
@@ -156,6 +162,13 @@ pretty_sheet <- function(x) {
   )
 }
 
+# Dictionary-backed: a Dictionary-tab edit for a raw sheet name wins over
+# this recode table, which still runs as the fallback for anything not
+# (yet) in the dictionary. See utils/dictionary.R.
+pretty_sheet <- function(x) {
+  dictionary_relabel(x, scope = "sheet", fallback = pretty_sheet_default)
+}
+
 stat_labels_iteration2 <- c(
   sum_totaal_groep = "Totale som",
   n_totaal_gebruikers = "Aantal gebruikers",
@@ -165,11 +178,16 @@ stat_labels_iteration2 <- c(
   gemiddelde_per_persoon = "Gemiddelde per persoon (export)"
 )
 
-pretty_stat <- function(x) {
+pretty_stat_default <- function(x) {
   unname(stat_labels_iteration2[x] %||% pretty_default_iteration2(x))
 }
 
-pretty_code_metric <- function(x) {
+# Dictionary-backed; see the note on pretty_sheet() above.
+pretty_stat <- function(x) {
+  dictionary_relabel(x, scope = "stat", fallback = pretty_stat_default)
+}
+
+pretty_code_metric_default <- function(x) {
   dplyr::recode(
     x,
     n_totaal_gebruikers = "Aantal gebruikers",
@@ -182,7 +200,12 @@ pretty_code_metric <- function(x) {
   )
 }
 
-pretty_vektmszsettingzpk <- function(x) {
+# Dictionary-backed; see the note on pretty_sheet() above.
+pretty_code_metric <- function(x) {
+  dictionary_relabel(x, scope = "code_metric", fallback = pretty_code_metric_default)
+}
+
+pretty_vektmszsettingzpk_default <- function(x) {
   dplyr::recode(
     as.character(x),
     "1" = "Poliklinisch",
@@ -191,6 +214,11 @@ pretty_vektmszsettingzpk <- function(x) {
     "9" = "missing",
     .default = as.character(x)
   )
+}
+
+# Dictionary-backed; see the note on pretty_sheet() above.
+pretty_vektmszsettingzpk <- function(x) {
+  dictionary_relabel(x, scope = "vektmszsettingzpk", fallback = pretty_vektmszsettingzpk_default)
 }
 
 normalize_it3_filter_value <- function(x) {
@@ -243,7 +271,7 @@ it3_zpk_combine_prestatie_types <- function(df) {
   out
 }
 
-pretty_it3_zpk_metric <- function(x) {
+pretty_it3_zpk_metric_default <- function(x) {
   dplyr::recode(
     x,
     n_totaal_gebruikers = "Aantal gebruikers",
@@ -253,6 +281,11 @@ pretty_it3_zpk_metric <- function(x) {
     gemiddelde_kosten_per_persoon = "Gemiddelde kosten per persoon",
     .default = as.character(x)
   )
+}
+
+# Dictionary-backed; see the note on pretty_sheet() above.
+pretty_it3_zpk_metric <- function(x) {
+  dictionary_relabel(x, scope = "it3_zpk_metric", fallback = pretty_it3_zpk_metric_default)
 }
 
 it3_zpk_metric_choices <- c(
@@ -362,7 +395,7 @@ allowed_split_columns <- function(sheet, columns) {
   intersect(allowed, columns)
 }
 
-pretty_metric_name <- function(x, sheet = NULL) {
+pretty_metric_name_default <- function(x, sheet = NULL) {
   x_clean <- as.character(x)
   if (!is.null(sheet) && sheet %in% c("zvw", "zvw_corrected")) {
     x_clean <- x_clean |>
@@ -388,7 +421,16 @@ pretty_metric_name <- function(x, sheet = NULL) {
     stringr::str_replace_all("Aaa", "AAA")
 }
 
-pretty_split_name <- function(x) {
+# Dictionary-backed; see the note on pretty_sheet() above. Scoped by whether
+# `sheet` is a ZVW sheet (raw names there share one prefix-stripped
+# namespace, "zvw_metric") or not ("metric_generic") -- same split the
+# original prefix-stripping logic already made.
+pretty_metric_name <- function(x, sheet = NULL) {
+  scope <- if (!is.null(sheet) && sheet %in% c("zvw", "zvw_corrected")) "zvw_metric" else "metric_generic"
+  dictionary_relabel(x, scope = scope, fallback = function(k) pretty_metric_name_default(k, sheet))
+}
+
+pretty_split_name_default <- function(x) {
   dplyr::recode(
     x,
     age_cat = "Leeftijd",
@@ -409,7 +451,12 @@ pretty_split_name <- function(x) {
   )
 }
 
-pretty_value <- function(column, value) {
+# Dictionary-backed; see the note on pretty_sheet() above.
+pretty_split_name <- function(x) {
+  dictionary_relabel(x, scope = "split_name", fallback = pretty_split_name_default)
+}
+
+pretty_value_default <- function(column, value) {
   value <- as.character(value)
   if (identical(column, "age_cat")) {
     return(dplyr::recode(
@@ -437,6 +484,13 @@ pretty_value <- function(column, value) {
     ))
   }
   value
+}
+
+# Dictionary-backed; scoped by `column` itself, since the same raw code
+# (e.g. "2") means different things in different columns -- see the note on
+# pretty_sheet() above.
+pretty_value <- function(column, value) {
+  dictionary_relabel(value, scope = column, fallback = function(v) pretty_value_default(column, v))
 }
 
 ordered_values <- function(x) {
@@ -523,8 +577,13 @@ top_total_people <- function(cohort, died) {
   )
 }
 
-population_label <- function(x) {
+population_label_default <- function(x) {
   dplyr::recode(as.character(x), `In leven` = "Controle", .default = as.character(x))
+}
+
+# Dictionary-backed; see the note on pretty_sheet() above.
+population_label <- function(x) {
+  dictionary_relabel(x, scope = "population", fallback = population_label_default)
 }
 
 population_palette <- c("Overleden" = "#1F77B4", "Controle" = "#9ECAE1")
@@ -2433,7 +2492,8 @@ ui <- navbarPage(
 
   tabPanel("Favorites", br(), favorites_panel_ui("favorites")),
   tabPanel("Export history", br(), export_history_panel_ui("export_history")),
-  tabPanel("Manage templates", br(), template_admin_ui("template_admin"))
+  tabPanel("Manage templates", br(), template_admin_ui("template_admin")),
+  tabPanel("Dictionary", br(), dictionary_admin_ui("dictionary"))
 )
 
 # ===== SERVER DEFINITION =====
@@ -6906,6 +6966,7 @@ server <- function(input, output, session) {
   favorites_panel_server("favorites_iter3", tab_label_filter = "Iteratie 3")
   export_history_panel_server("export_history")
   template_admin_server("template_admin")
+  dictionary_admin_server("dictionary")
 }
 
 # Run the app (Using your existing wrapper)

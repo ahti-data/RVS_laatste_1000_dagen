@@ -27,6 +27,13 @@ work done.
   export (committed to git, shipped by the deploy). `templates/previews/<name>.png` is an
   optional, curated-by-hand screenshot shown as a thumbnail on the "Manage templates" tab.
 - `dashboard/state/` — runtime state, never committed or synced by the deploy:
+  - `dictionary.json` — the shared raw-name -> pretty-label lookup for chart bar/category labels
+    (see `dashboard/utils/dictionary.R`), edited from the **Dictionary** tab
+    (`dashboard/utils/dictionary_admin.R`). Prefilled on first use from
+    `dashboard/data/metadata/dictionary_seed.R`'s `dictionary_seed_entries()` override -- rows
+    mechanically derived from this app's own `pretty_*_default()` recode tables (see Conventions
+    below), not hand-typed. A user edit always wins over the seed, since edits upsert into the
+    same file the seed was written into.
   - `favorites.json` (shared favorites) and `favorite_assets/` (client-captured PNG snapshots of
     starred charts, see `TC_FAVORITE_CAPTURE_JS` in `utils/chart_downloads.R`).
   - `export_history/<id>.json` — one file per "Download slide" click, logged automatically (see
@@ -62,6 +69,14 @@ work done.
   favoriting) identifying which output/sheet backs that chart -- they ride along in every
   export's embedded provenance log (see below) so a chart found later can be traced back to the
   exact source file/sheet, not just the dashboard tab.
+- Every `pretty_*()`/`population_label()` function in `app.R` (e.g. `pretty_metric_name()`,
+  `pretty_value()`, `pretty_sheet()`) is a thin dictionary-backed wrapper: it calls
+  `dictionary_relabel()` with a `scope` (usually the column name, or a domain tag like
+  `"zvw_metric"` when several columns share meaning) and its own original recode logic renamed to
+  `<name>_default()` as the `fallback` -- so a Dictionary-tab edit overrides that one raw value
+  everywhere it's used, while anything not yet in the dictionary keeps working exactly as before.
+  Add a new raw->pretty mapping via the Dictionary tab, not by editing a `pretty_*_default()`
+  table, unless the mapping should also apply to dashboards with no matching dictionary entry.
 
 ## Running
 
