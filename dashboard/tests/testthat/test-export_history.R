@@ -216,10 +216,8 @@ test_that("export_history_group_rows handles an empty entry list", {
 })
 
 # ---- Regenerate -------------------------------------------------------------
-# A plain list(userData = new.env()) stands in for a Shiny session here --
-# tc_chart_registry()/*_register()/*_get() only ever touch session$userData,
-# so this is a faithful, dependency-free substitute for these tests.
-fake_session <- function() list(userData = new.env())
+# fake_session() lives in helper-session.R (auto-sourced by testthat), shared
+# with test-favorites.R's live-rebuild tests.
 
 test_that("export_history_regenerate_entry falls back to a snapshot rebuild when the chart isn't registered", {
   skip_if_not(have_templates, "templates directory not available")

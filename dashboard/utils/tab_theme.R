@@ -10,7 +10,7 @@
 #' tags each with a colour class (see [tc_tab_color_css()]). Runs once on
 #' `shiny:connected`; tab titles are static text set at UI-build time, so
 #' there's nothing to re-run later. Idempotent registration, same pattern as
-#' `TC_FAVORITE_CAPTURE_JS` in `utils/chart_downloads.R`.
+#' `TC_CHART_CAPTURE_JS` in `utils/chart_downloads.R`.
 TC_TAB_COLOR_JS <- r"(
 if (!window.__tcTabColorInit) {
   window.__tcTabColorInit = true;

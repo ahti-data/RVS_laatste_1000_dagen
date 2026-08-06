@@ -5,66 +5,6 @@ resolve_tc_chart_type <- function(chart_type) {
   chart_type
 }
 
-# ---------------------------------------------------------------------------
-# Client-side PNG snapshot on "Save as favorite".
-#
-# Captures whatever Plotly widget is paired with a chart's download module
-# (via `plot_output_id`) at the moment it is starred, using Plotly.js's own
-# Plotly.toImage() -- i.e. exactly what's on screen, no server-side ggplot
-# object needed. The image only leaves the browser once the server confirms
-# the favorite was saved and tells the client which favorite id to tag it
-# with (session$sendCustomMessage("tc_favorite_saved", ...)), so the PNG on
-# disk (state/favorite_assets/<id>.png) always matches a real favorites.json
-# entry. Safe no-op when the paired output isn't a Plotly widget (e.g. a
-# renderPlot-based chart) or Plotly can't be found.
-#
-# Emitted on every chart_data_downloads_ui() call that shows the favorite
-# button; the `window.__tcFavoriteCaptureInit` guard makes registering the
-# (single, delegated) listeners idempotent no matter how many times the
-# script tag itself appears in the page.
-TC_FAVORITE_CAPTURE_JS <- "
-if (!window.__tcFavoriteCaptureInit) {
-  window.__tcFavoriteCaptureInit = true;
-  var __tcPendingCapture = {};
-
-  function __tcFindPlotlyDiv(outputId) {
-    var el = document.getElementById(outputId);
-    if (!el) return null;
-    if (el.classList && el.classList.contains('js-plotly-plot')) return el;
-    return el.querySelector('.js-plotly-plot');
-  }
-
-  $(document).on('click', '.tc-favorite-btn', function() {
-    var btnId = this.id;
-    var wrap = $(this).closest('[data-plot-output-id]');
-    var outputId = wrap.length ? wrap.data('plot-output-id') : null;
-    var gd = (outputId && typeof Plotly !== 'undefined') ? __tcFindPlotlyDiv(outputId) : null;
-    if (!gd) {
-      __tcPendingCapture[btnId] = null;
-      return;
-    }
-    var w = (gd._fullLayout && gd._fullLayout.width) || 900;
-    var h = (gd._fullLayout && gd._fullLayout.height) || 550;
-    __tcPendingCapture[btnId] = Plotly.toImage(gd, {format: 'png', width: w, height: h})
-      .catch(function() { return null; });
-  });
-
-  $(document).on('shiny:connected', function() {
-    Shiny.addCustomMessageHandler('tc_favorite_saved', function(msg) {
-      var p = __tcPendingCapture[msg.btn_id];
-      if (typeof p === 'undefined') return;
-      delete __tcPendingCapture[msg.btn_id];
-      if (p === null) return;
-      p.then(function(dataUrl) {
-        if (!dataUrl) return;
-        var inputId = msg.btn_id.replace(/favorite$/, 'png_capture');
-        Shiny.setInputValue(inputId, {fav_id: msg.fav_id, image: dataUrl}, {priority: 'event'});
-      });
-    });
-  });
-}
-"
-
 #' Delegated click handler for the "Choose a slide template" modal's
 #' thumbnail grid (see `chart_data_downloads_server()`'s `slide_template_open`
 #' observer) -- replaces the old `selectizeInput`-based picker, whose large
@@ -72,7 +12,7 @@ if (!window.__tcFavoriteCaptureInit) {
 #' always reflects the current template list fresh (built at open time, via
 #' [tc_template_choice_items()]), so unlike the old picker there's no
 #' separate refresh-on-upload mechanism to maintain. Idempotent registration,
-#' same pattern as [TC_FAVORITE_CAPTURE_JS].
+#' same pattern as [TC_CHART_CAPTURE_JS].
 TC_TEMPLATE_MODAL_JS <- r"(
 if (!window.__tcTemplateModalInit) {
   window.__tcTemplateModalInit = true;
@@ -96,14 +36,13 @@ TC_TEMPLATE_MODAL_CSS <- r"(
 .tc-template-grid-label { margin-top:8px; font-size:14px; color:#374151; word-break:break-word; }
 )"
 
-#' Client-side PNG snapshot for "Download slide" and Export History's
-#' "Regenerate selected", so their ZIPs can include a `charts_overview.html`
-#' the same way a bulk favorites download already does (see
-#' `tc_build_charts_overview_html()` in `utils/favorites.R`) -- generalizes
-#' [TC_FAVORITE_CAPTURE_JS]'s underlying capture primitive to two more
-#' trigger points, rather than only the favorite star button.
+#' Client-side PNG snapshot for "Download slide", Export History's
+#' "Regenerate selected", and Favorites' live "Download slides" bulk button,
+#' so their ZIPs can include a fresh `charts_overview.html` (see
+#' `tc_build_charts_overview_html()` in `utils/favorites.R`) captured at the
+#' moment of download/regenerate, not a stale one.
 #'
-#' Both `downloadButton`s this replaces become a plain `actionButton` (class
+#' Every `downloadButton` this replaces becomes a plain `actionButton` (class
 #' `tc-slide-go-btn` / `tc-regenerate-go-btn`) paired with a hidden *real*
 #' `downloadButton` that the client clicks programmatically once it has
 #' either captured a screenshot or given up waiting -- a real download can't
@@ -115,13 +54,13 @@ TC_TEMPLATE_MODAL_CSS <- r"(
 #'
 #' `tc-slide-go-btn` (one chart, e.g. `plot_basispopulatie`) reads its own
 #' `data-plot-output-id` directly. `tc-regenerate-go-btn` (Export History's
-#' bottom banner, spanning an arbitrary multi-chart selection) instead reads
-#' a JSON-encoded `data-module-ids` list (refreshed by the server whenever
-#' the selection changes) and looks each one up via `data-module-id` on
-#' whichever chart panel(s) happen to be rendered right now -- a chart
-#' outside the current tab/session simply isn't found, which is exactly the
-#' same "not live" case the underlying data regenerate already falls back
-#' from.
+#' bottom banner, or Favorites' "Download slides" button, each spanning an
+#' arbitrary multi-chart selection) instead reads a JSON-encoded
+#' `data-module-ids` list (refreshed by the server whenever the selection
+#' changes) and looks each one up via `data-module-id` on whichever chart
+#' panel(s) happen to be rendered right now -- a chart outside the current
+#' tab/session simply isn't found, which is exactly the same "not live" case
+#' the underlying data regenerate/favorites rebuild already skips.
 TC_CHART_CAPTURE_JS <- r"(
 if (!window.__tcChartCaptureInit) {
   window.__tcChartCaptureInit = true;
@@ -198,10 +137,11 @@ if (!window.__tcChartCaptureInit) {
 #' @param favorite_label Label for the "save as favorite" button.
 #' @param plot_output_id Optional Shiny output id (top-level, NOT namespaced --
 #'   e.g. `"plot_basispopulatie"`) of the Plotly widget this chart's downloads
-#'   pair with. When set, starring a favorite also snapshots that widget as a
-#'   PNG (see [TC_FAVORITE_CAPTURE_JS]) for inclusion in the favorites deck
-#'   ZIP. Omit for charts with no Plotly widget (e.g. `renderPlot()`-based) --
-#'   the favorite is still saved, just without an image.
+#'   pair with. When set, a "Download slide"/"Regenerate"/live favorites-deck
+#'   click snapshots that widget as a PNG (see [TC_CHART_CAPTURE_JS]) for the
+#'   ZIP's `charts_overview.html`. Omit for charts with no Plotly widget
+#'   (e.g. `renderPlot()`-based) -- the export still works, just without an
+#'   image.
 #' @param default_slide_order Initial "Category order" selection (one of
 #'   `"auto"`, `"as_is"`, `"cat_asc"`, `"cat_desc"`, `"val_asc"`,
 #'   `"val_desc"` -- see [tc_order_slide_matrix()]). `"auto"` only reorders
@@ -291,14 +231,17 @@ chart_data_downloads_ui <- function(
           selected = default_slide_order
         ),
         shiny::tags$div(
+          # data-plot-output-id/data-module-id aren't used by the favorite
+          # button itself -- they're the lookup anchor TC_CHART_CAPTURE_JS's
+          # ".tc-regenerate-go-btn" handler uses to screenshot this chart's
+          # live widget from Export History's or Favorites' bulk downloads.
           `data-plot-output-id` = plot_output_id,
           `data-module-id` = id,
           shiny::actionButton(ns("favorite"), favorite_label,
-                              class = "btn-default tc-favorite-btn",
+                              class = "btn-default",
                               style = "margin-top:8px;"),
           shiny::uiOutput(ns("favorite_status"))
         ),
-        shiny::tags$script(shiny::HTML(TC_FAVORITE_CAPTURE_JS)),
         shiny::tags$script(shiny::HTML(TC_TEMPLATE_MODAL_JS)),
         shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS)),
         shiny::tags$style(shiny::HTML(TC_TEMPLATE_MODAL_CSS))
@@ -561,8 +504,11 @@ chart_data_downloads_server <- function(
       # data (implicitly isolated -- downloadHandler/registry calls run
       # outside a reactive context) -- everything build_export_now() needs
       # to write a ZIP, and everything a bulk regenerate
-      # (utils/export_history.R) needs to fold this chart into a combined
-      # deck without writing a standalone ZIP for it first.
+      # (utils/export_history.R) or a live favorites rebuild
+      # (utils/favorites.R) needs to fold this chart into a combined deck
+      # without writing a standalone ZIP for it first. raw_data is only
+      # consumed by favorites' "raw" bulk download -- build_export_now()
+      # and Export History never read it.
       build_export_spec <- function() {
         resolved_chart_type <- resolve_tc_chart_type(chart_type)
 
@@ -633,6 +579,7 @@ chart_data_downloads_server <- function(
 
         list(
           tc_data = tc_data,
+          raw_data = data(),
           chart_type = slide_type,
           slide_matrix = slide_matrix,
           is_faceted = !is.null(facet_col) || is_tc_workbook_list(tc_data),
@@ -773,51 +720,19 @@ chart_data_downloads_server <- function(
 
       shiny::observeEvent(input$favorite, {
         entry <- favorites_capture(
-          data              = data(),
           chart_type        = resolve_tc_chart_type(chart_type),
-          category_col      = category_col,
-          series_col        = series_col,
-          value_col         = value_col,
-          agg_fun           = agg_fun,
-          category_order    = category_order,
-          series_order      = series_order,
-          facet_col         = facet_col,
           slide_title       = resolve_opt(slide_title),
           figure_title      = resolve_opt(figure_title),
-          template_override = slide_effective_override(),
-          slide_order       = tc_or(input$slide_order, "auto"),
           dashboard_title   = tc_ctx_dashboard_title(),
           tab_label         = tc_ctx_active_tab(),
           subtab_label      = tc_ctx_active_subtab(),
           selections        = tc_ctx_selections(module_id = id),
-          source_output     = resolve_opt(source_output),
-          source_sheet      = resolve_opt(source_sheet),
-          source_mtime      = resolve_opt(source_mtime),
           module_id         = id,
           filename_prefix   = filename_prefix
         )
-        fav_id <- favorites_add(entry)
+        favorites_add(entry)
         favorite_status_rv(sprintf("Saved '%s' to favorites.", entry$label))
-        # Tell the client which favorite this button's click just created, so
-        # it can tag the (already-requested, possibly still-in-flight) PNG
-        # snapshot with the right id -- see TC_FAVORITE_CAPTURE_JS.
-        session$sendCustomMessage(
-          "tc_favorite_saved",
-          list(btn_id = session$ns("favorite"), fav_id = fav_id)
-        )
       })
-
-      # Written by TC_FAVORITE_CAPTURE_JS once the client-side Plotly snapshot
-      # resolves. Silently ignored if no plot_output_id was wired, if the
-      # paired output isn't a Plotly widget, or if decoding fails -- a missing
-      # snapshot just means that favorite's PNG is absent from the deck ZIP,
-      # never a broken favorite.
-      shiny::observeEvent(input$png_capture, {
-        payload <- input$png_capture
-        fav_id  <- payload$fav_id
-        if (is.null(fav_id) || !nzchar(fav_id)) return()
-        tc_write_captured_asset(payload$image, favorite_asset_path(fav_id))
-      }, ignoreInit = TRUE)
 
       output$favorite_status <- shiny::renderUI({
         shiny::req(favorite_status_rv())

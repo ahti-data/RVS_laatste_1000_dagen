@@ -37,6 +37,25 @@ tc_now <- function(fmt = "%Y-%m-%d %H:%M:%S") {
   format(Sys.time(), fmt, tz = "Europe/Amsterdam")
 }
 
+#' Run `fn` while holding an exclusive lock on a `.lock` sidecar next to
+#' `path`, so concurrent read-modify-write cycles against the same shared
+#' state file (`favorites.json`, a template upload) don't race each other.
+#' Locks a sidecar rather than `path` itself so readers that don't go through
+#' this helper are never blocked.
+#' @param path The shared file (or directory) being protected; the actual
+#'   lock file is `paste0(path, ".lock")`.
+#' @param fn Zero-arg function to run while holding the lock.
+#' @param timeout Milliseconds to wait for the lock before giving up.
+tc_with_file_lock <- function(path, fn, timeout = 10000) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  lock <- filelock::lock(paste0(path, ".lock"), timeout = timeout)
+  if (is.null(lock)) {
+    stop("Could not acquire lock on ", path, " within ", timeout, "ms.")
+  }
+  on.exit(filelock::unlock(lock))
+  fn()
+}
+
 #' Format a source data file's last-modified time for the `source_updated=`
 #' field in [tc_build_datasheet_log()] -- same format/timezone as [tc_now()],
 #' so the two are directly comparable on a datasheet's corner cell.
@@ -560,6 +579,16 @@ tc_numeric_or_na <- function(x) {
 #'   * "as_is"    - keep the order exactly as provided.
 #'   * "cat_asc"  / "cat_desc" - sort by category label (numeric-aware).
 #'   * "val_asc"  / "val_desc" - sort by the category's total across all series.
+#' Coerce one think-cell matrix cell to numeric for total/ordering purposes,
+#' stripping a waterfall marker prefix first (`format_tc_waterfall()` encodes
+#' subtotal/end cells as `"t|123"`/`"e|456"`, not plain numbers) -- without
+#' this, those cells silently coerce to `NA` and drop out of the total. A
+#' no-op for any other matrix, since the regex simply doesn't match a plain
+#' numeric string.
+tc_numeric_cell_value <- function(x) {
+  suppressWarnings(as.numeric(sub("^[a-z]\\|", "", as.character(x))))
+}
+
 tc_order_slide_matrix <- function(m, mode = "auto") {
   m <- as.data.frame(m, stringsAsFactors = FALSE, check.names = FALSE)
   if (is.null(mode) || !nzchar(mode) || identical(mode, "as_is")) return(m)
@@ -570,7 +599,7 @@ tc_order_slide_matrix <- function(m, mode = "auto") {
 
   col_totals <- function() {
     vapply(cats, function(cn) {
-      sum(suppressWarnings(as.numeric(as.character(m[[cn]]))), na.rm = TRUE)
+      sum(tc_numeric_cell_value(m[[cn]]), na.rm = TRUE)
     }, numeric(1))
   }
 

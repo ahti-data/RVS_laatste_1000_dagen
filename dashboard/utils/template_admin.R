@@ -34,7 +34,13 @@ tmpl_looks_like_pptx <- function(path) {
   length(magic) == 2 && magic[1] == as.raw(0x50) && magic[2] == as.raw(0x4B) # "PK"
 }
 
-#' Copy a validated upload into the runtime uploads dir, avoiding name collisions.
+#' Copy a validated upload into the runtime uploads dir, avoiding name
+#' collisions. The actual copy runs under [tc_with_file_lock()] (see
+#' `utils/slide_download.R`), keyed to the uploads dir itself, so two
+#' concurrent uploads (e.g. targeting the same sanitized filename) can't
+#' interleave their `file.copy()` calls. The dir-exists/writable check stays
+#' outside the lock so a missing/unwritable directory still returns the
+#' usual graceful error instead of a lock-acquire failure.
 #' @param tmp_path Path to the uploaded temp file (from `fileInput`).
 #' @param original_name Original file name as selected by the user.
 #' @param templates_dir Optional base templates directory override.
@@ -69,14 +75,15 @@ tmpl_save_upload <- function(tmp_path, original_name, templates_dir = NULL) {
 
   filename <- tmpl_sanitize_filename(original_name)
   dest <- file.path(custom_dir, filename)
-  copied <- file.copy(tmp_path, dest, overwrite = TRUE)
-  if (!isTRUE(copied) || !file.exists(dest)) {
-    return(list(ok = FALSE, filename = NA_character_, message = sprintf(
-      "Could not save the upload to '%s'. The folder may not be writable by the app.",
-      dest)))
-  }
-
-  list(ok = TRUE, message = sprintf("Uploaded '%s'.", filename), filename = filename)
+  tc_with_file_lock(file.path(custom_dir, ".lock"), function() {
+    copied <- file.copy(tmp_path, dest, overwrite = TRUE)
+    if (!isTRUE(copied) || !file.exists(dest)) {
+      return(list(ok = FALSE, filename = NA_character_, message = sprintf(
+        "Could not save the upload to '%s'. The folder may not be writable by the app.",
+        dest)))
+    }
+    list(ok = TRUE, message = sprintf("Uploaded '%s'.", filename), filename = filename)
+  })
 }
 
 #' Whether a file looks like a real PNG (checks the 8-byte PNG signature)

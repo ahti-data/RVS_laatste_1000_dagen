@@ -19,6 +19,23 @@ sample_matrix <- function() {
   m
 }
 
+test_that("tc_with_file_lock runs fn and releases the lock in time for a subsequent call", {
+  path <- tempfile("lock_target_")
+  # If the lock weren't released after the first call, the second would hang
+  # until its own timeout and this test would fail/time out, not just fail
+  # an assertion.
+  expect_equal(tc_with_file_lock(path, function() "first"), "first")
+  expect_equal(tc_with_file_lock(path, function() "second"), "second")
+})
+
+test_that("tc_with_file_lock still releases the lock when fn errors", {
+  path <- tempfile("lock_target_")
+  expect_error(tc_with_file_lock(path, function() stop("boom")), "boom")
+  # on.exit() must run even after an error -- confirmed by this call
+  # succeeding immediately rather than timing out on a still-held lock.
+  expect_equal(tc_with_file_lock(path, function() "ok"), "ok")
+})
+
 test_that("chart types map to the correct template (or none)", {
   expect_true(tc_chart_type_has_template("line"))
   expect_true(tc_chart_type_has_template("grouped_bar"))
@@ -444,6 +461,26 @@ test_that("category ordering matches the displayed numeric axis", {
                    lab = "v", mrt = 3, jan = 1, feb = 2)
   names(mm)[1] <- ""
   expect_equal(names(tc_order_slide_matrix(mm, "auto"))[-1], c("mrt", "jan", "feb"))
+})
+
+test_that("tc_numeric_cell_value strips a waterfall marker prefix before coercion", {
+  expect_equal(tc_numeric_cell_value("t|123"), 123)
+  expect_equal(tc_numeric_cell_value("e|456"), 456)
+  expect_equal(tc_numeric_cell_value("42"), 42)
+  expect_true(is.na(tc_numeric_cell_value("not_a_number")))
+})
+
+test_that("value-based ordering strips waterfall t|/e| markers before comparing totals", {
+  # format_tc_waterfall() encodes subtotal/end cells as "t|<value>"/"e|<value>",
+  # not plain numbers. Without stripping the marker first, both would coerce
+  # to NA (treated as 0 by col_totals()'s na.rm = TRUE), so b and c would tie
+  # at the front instead of sorting by their real values (b=5 < a=10 < c=100).
+  m <- data.frame(check.names = FALSE, stringsAsFactors = FALSE,
+                  lab = "Series 1", a = "10", b = "t|5", c = "e|100")
+  names(m)[1] <- ""
+
+  expect_equal(names(tc_order_slide_matrix(m, "val_asc"))[-1], c("b", "a", "c"))
+  expect_equal(names(tc_order_slide_matrix(m, "val_desc"))[-1], c("c", "a", "b"))
 })
 
 test_that("tc_reorder_by_categories reorders whichever axis holds the categories", {

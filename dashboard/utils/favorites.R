@@ -1,15 +1,24 @@
-#' Shared favorites: star a chart's current export, revisit it later, and
-#' download every starred chart as one combined deck.
+#' Shared favorites: star a chart, revisit it later, and download every
+#' starred chart as one combined deck, rebuilt fresh against today's data.
 #'
 #' Deliberately per-dashboard, not per-user (kept simple for now — see
 #' CLAUDE.md). Persisted as a flat JSON file at a path outside every folder
 #' the deploy workflow syncs, so favorites survive a redeploy the same way
 #' `state/template_uploads/` does (see `utils/template_admin.R`).
 #'
-#' A favorite is a *snapshot* of an export taken at star-time (table + a
-#' think-cell slide block + the option selections that produced it), not a
-#' live recipe that re-queries fresh data later. Re-running favorites against
-#' updated data is a real follow-up, not attempted here.
+#' A favorite is a *bookmark* -- which chart (`module_id`), plus display
+#' metadata for the list -- not a snapshot of an export taken at star-time.
+#' Every bulk download rebuilds live from that chart's current reactive data
+#' via the session's chart registry (`tc_chart_registry_get()` in
+#' `utils/slide_download.R`), the same mechanism Export History's
+#' "Regenerate" uses (see `export_history_prepare_regenerate_spec()` in
+#' `utils/export_history.R`). A favorite whose chart isn't live in the
+#' downloading session (e.g. that chart no longer exists in the dashboard) is
+#' simply skipped, with a notification -- there is no frozen-snapshot
+#' fallback. Note this shares Export History's own known limitation: the
+#' rebuild reads whatever the chart's inputs currently show in that session,
+#' not the filter selections active when the favorite was starred (those are
+#' kept in `selections` for display only).
 
 FAVORITES_RELATIVE_PATH <- file.path("state", "favorites.json")
 
@@ -17,20 +26,6 @@ FAVORITES_RELATIVE_PATH <- file.path("state", "favorites.json")
 #' `SHINY_FAVORITES_PATH` if a dashboard needs a different location.
 favorites_path <- function() {
   Sys.getenv("SHINY_FAVORITES_PATH", FAVORITES_RELATIVE_PATH)
-}
-
-#' Directory holding client-captured PNG snapshots of starred charts (see
-#' `TC_FAVORITE_CAPTURE_JS` in `utils/chart_downloads.R`). Kept beside
-#' `favorites.json` so it follows the same `SHINY_FAVORITES_PATH` override and
-#' the same never-committed, never-deploy-synced `state/` treatment.
-favorites_assets_dir <- function() {
-  file.path(dirname(favorites_path()), "favorite_assets")
-}
-
-#' Path a favorite's PNG snapshot would live at, whether or not it exists yet.
-#' @param id Favorite id.
-favorite_asset_path <- function(id) {
-  file.path(favorites_assets_dir(), paste0(id, ".png"))
 }
 
 #' Read the shared favorites list.
@@ -74,47 +69,52 @@ favorites_download_new_id <- function() {
 }
 
 #' Save a new favorite.
+#'
+#' The full read-modify-write cycle runs under [tc_with_file_lock()] (see
+#' `utils/slide_download.R`) so two sessions starring/removing favorites at
+#' nearly the same time can't lose one write to the other -- without the
+#' lock, both would read the same stale list and each write back only their
+#' own change, dropping whichever one wrote second.
 #' @param entry List, typically the output of [favorites_capture()].
 #' @return The new favorite's id (invisibly).
 favorites_add <- function(entry) {
-  entries <- favorites_list()
   entry$id         <- favorites_new_id()
   entry$created_at <- tc_now()
-  entries[[length(entries) + 1]] <- entry
-  favorites_write(entries)
+  tc_with_file_lock(favorites_path(), function() {
+    entries <- favorites_list()
+    entries[[length(entries) + 1]] <- entry
+    favorites_write(entries)
+  })
   invisible(entry$id)
 }
 
-#' Remove a favorite by id (and its PNG snapshot, if any, to avoid orphaned
-#' asset files accumulating in `favorites_assets_dir()`).
+#' Remove a favorite by id. See [favorites_add()] for why this locks.
 favorites_remove <- function(id) {
-  entries <- favorites_list()
-  kept <- Filter(function(e) !identical(e$id, id), entries)
-  favorites_write(kept)
-  asset <- favorite_asset_path(id)
-  if (file.exists(asset)) unlink(asset)
+  tc_with_file_lock(favorites_path(), function() {
+    entries <- favorites_list()
+    kept <- Filter(function(e) !identical(e$id, id), entries)
+    favorites_write(kept)
+  })
   invisible(TRUE)
 }
 
-#' Remove several favorites (and their PNG snapshots) at once. Irreversible
-#' -- the UI (`favorites_panel_server()`) gates this behind a confirmation
-#' modal before calling it.
+#' Remove several favorites at once. Irreversible -- the UI
+#' (`favorites_panel_server()`) gates this behind a confirmation modal
+#' before calling it. See [favorites_add()] for why this locks.
 #' @param ids Character vector of favorite ids to remove; `NULL` removes
 #'   every saved favorite (used by [favorites_remove_all()]).
 favorites_remove_ids <- function(ids = NULL) {
-  entries <- favorites_list()
-  target_ids <- if (is.null(ids)) vapply(entries, function(e) tc_or(e$id, ""), character(1)) else ids
-  for (id in target_ids) {
-    asset <- favorite_asset_path(id)
-    if (file.exists(asset)) unlink(asset)
-  }
-  kept <- Filter(function(e) !(tc_or(e$id, "") %in% target_ids), entries)
-  favorites_write(kept)
+  tc_with_file_lock(favorites_path(), function() {
+    entries <- favorites_list()
+    target_ids <- if (is.null(ids)) vapply(entries, function(e) tc_or(e$id, ""), character(1)) else ids
+    kept <- Filter(function(e) !(tc_or(e$id, "") %in% target_ids), entries)
+    favorites_write(kept)
+  })
   invisible(TRUE)
 }
 
-#' Remove every saved favorite (and every PNG snapshot), emptying the shared
-#' list. Thin wrapper around [favorites_remove_ids()] with `ids = NULL`.
+#' Remove every saved favorite, emptying the shared list. Thin wrapper
+#' around [favorites_remove_ids()] with `ids = NULL`.
 favorites_remove_all <- function() {
   favorites_remove_ids(NULL)
 }
@@ -158,91 +158,39 @@ favorites_table_to_storage <- function(df) {
   )
 }
 
-#' Capture one favorite entry from the same inputs the "Download slide"
-#' button already uses, so starring a chart saves exactly what that button
-#' would produce right now. Mirrors the resolution steps in
-#' `chart_data_downloads_server()`'s slide download handler
-#' (`utils/chart_downloads.R`) rather than the other way around, so both stay
-#' obviously in sync.
+#' Capture one favorite entry -- a bookmark to a chart plus display metadata,
+#' not a data snapshot (see the file header). Every actual export table/slide
+#' is rebuilt later, live, from `module_id` via the session's chart registry
+#' (see [favorites_live_spec_or_null()]).
 #'
-#' @param data Resolved data frame (already called, not a reactive). Stored
-#'   verbatim as `raw_table` (matches the "Download data (raw)" button) as well
-#'   as reshaped into the think-cell matrix (`tc_table`).
-#' @param chart_type Resolved (non-reactive) think-cell chart type.
-#' @param category_col,series_col,value_col Column names for think-cell export.
-#' @param agg_fun,category_order,series_order Passed through to [tc_prepare_slide()].
-#' @param facet_col Optional facet column; faceted charts skip slide-matrix prep.
-#' @param slide_title,figure_title Optional slide text.
-#' @param template_override Optional explicit template filename/path.
-#' @param slide_order Category order mode (see [tc_order_slide_matrix()]).
-#' @param dashboard_title,tab_label,subtab_label,selections Export log metadata.
-#' @param source_output,source_sheet,source_mtime Optional data-source
-#'   identifiers (see [tc_build_datasheet_log()] in `utils/slide_download.R`),
-#'   stored on the entry so a later deck download can stamp them into this
-#'   favorite's own datasheet corner cell, same as the single-chart download.
+#' @param chart_type Resolved (non-reactive) think-cell chart type, for
+#'   display in the favorites list only -- a live rebuild re-resolves this
+#'   fresh from current data, the same way [chart_data_downloads_server()]'s
+#'   `build_export_spec()` does.
+#' @param slide_title,figure_title Optional slide text, used only to resolve
+#'   `label` below -- not persisted on the entry, since a live rebuild pulls
+#'   fresh ones from the chart's current spec.
+#' @param dashboard_title,tab_label,subtab_label Breadcrumb metadata for the
+#'   favorites list.
+#' @param selections Snapshot of the option selections active when starred,
+#'   for display only (see the file header note on selection fidelity) --
+#'   never re-applied to a live rebuild.
 #' @param module_id The chart's `chart_data_downloads_server(id = ...)`,
-#'   stored on the entry so a later "regenerate" (see `utils/export_history.R`)
-#'   can look this chart back up in the session's live chart registry and
-#'   rebuild it against today's data instead of replaying this snapshot.
-#' @param filename_prefix Prefix used for this chart's downloads.
+#'   used to look this chart back up in the session's live chart registry at
+#'   download time (see [favorites_live_spec_or_null()]).
+#' @param filename_prefix Used only as a last-resort fallback when resolving
+#'   `label` below.
 #' @param label Optional short display label; defaults to the chart's own
 #'   title (`figure_title`/`slide_title`), then the sub-tab, then the prefix.
-#' @param templates_dir Optional templates directory override (mainly for tests).
 #' @return A list ready for [favorites_add()].
 favorites_capture <- function(
-    data, chart_type, category_col, series_col, value_col,
-    agg_fun = NULL, category_order = NULL, series_order = NULL, facet_col = NULL,
-    slide_title = "", figure_title = "", template_override = "", slide_order = "auto",
+    chart_type,
+    slide_title = "", figure_title = "",
     dashboard_title = "", tab_label = "", subtab_label = "",
-    selections = NULL, source_output = NULL, source_sheet = NULL, source_mtime = NULL,
+    selections = NULL,
     module_id = NULL,
-    filename_prefix = "chart", label = NULL, templates_dir = NULL
+    filename_prefix = "chart", label = NULL
 ) {
-  slide_type   <- chart_type
-  slide_matrix <- NULL
-  if (is.null(facet_col)) {
-    prep <- tryCatch(
-      tc_prepare_slide(
-        df = data, chart_type = chart_type, category_col = category_col,
-        series_col = series_col, value_col = value_col, agg_fun = agg_fun,
-        category_order = category_order, series_order = series_order
-      ),
-      error = function(e) NULL
-    )
-    if (!is.null(prep)) {
-      slide_type   <- prep$chart_type
-      slide_matrix <- prep$matrix
-    }
-  }
-  if (is.null(slide_matrix)) {
-    slide_matrix <- tc_slide_orientation(data, chart_type)
-  }
-  slide_matrix <- tc_order_slide_matrix(slide_matrix, slide_order)
-
-  override <- if (nzchar(tc_or(template_override, ""))) template_override else NULL
-  template_path <- tc_template_for_chart_type(slide_type, templates_dir = templates_dir, override = override)
-
-  # Matches tc_build_slide_zip()'s own fallback exactly: only substitute the
-  # sub-tab label when slide_title is genuinely empty (tc_or() doesn't treat
-  # "" as missing, so this can't be a simple tc_or() chain).
-  effective_slide_title <- if (!nzchar(trimws(tc_or(slide_title, "")))) {
-    tc_or(subtab_label, "")
-  } else {
-    slide_title
-  }
-
-  slide_block <- if (!is.na(template_path)) {
-    tryCatch(
-      tc_build_ppttc_slide_block(
-        slide_matrix, tc_short_path(template_path),
-        effective_slide_title, figure_title
-      ),
-      error = function(e) NULL
-    )
-  } else {
-    NULL
-  }
-
   # tc_or() only falls back on NULL, not on "" — and tc_ctx_active_subtab()
   # legitimately returns "" whenever the app hasn't registered a nav/subtab
   # context (see tc_register_app_context()), so pick the first non-empty
@@ -257,31 +205,12 @@ favorites_capture <- function(
 
   list(
     label           = tc_or(resolved_label, "favorite"),
-    filename_prefix = filename_prefix,
     dashboard_title = dashboard_title,
     tab_label       = tab_label,
     subtab_label    = subtab_label,
-    chart_type      = slide_type,
-    template_name   = if (!is.na(template_path)) basename(template_path) else NA_character_,
+    chart_type      = chart_type,
     selections      = selections,
-    source_output   = source_output,
-    source_sheet    = source_sheet,
-    source_mtime    = source_mtime,
-    module_id       = module_id,
-    slide_order     = slide_order,
-    # slide_block embeds an *absolute* template path, only valid for rendering
-    # on this same machine (see favorites_build_deck_zip()). slide_title/
-    # figure_title are kept separately so a portable block -- referencing the
-    # template by bare file name -- can be rebuilt for the shipped fallback.
-    slide_title     = effective_slide_title,
-    figure_title    = tc_or(figure_title, ""),
-    slide_block     = slide_block,
-    tc_table        = favorites_table_to_storage(slide_matrix),
-    # The exact data behind the plot, before think-cell reshaping -- the same
-    # data the chart's own "Download data (raw)" button writes. Captured
-    # alongside tc_table so the combined favorites deck can ship both a
-    # think-cell workbook and an "as originally plotted" workbook.
-    raw_table       = favorites_table_to_storage(data)
+    module_id       = module_id
   )
 }
 
@@ -532,26 +461,158 @@ tc_build_raw_xlsx_from_specs <- function(specs, path) {
   invisible(path)
 }
 
-#' Build the rich, [tc_build_deck_from_specs()]-shaped spec list for every
-#' saved favorite, auto-logging each renderable one to Export History
-#' (`utils/export_history.R`) along the way -- all sharing one fresh
-#' `favorite_download_id` (see [favorites_download_new_id()]) so a whole
-#' click can be found and regenerated together later, and one fresh
-#' `download_id` each -- the same as the single-chart "Download slide"
-#' button (favorite content never changes after starring, so there's no
-#' staleness risk in always minting fresh ids rather than reusing one).
-#' Shared by [favorites_build_deck_zip()] ("Download slides") and, since
-#' its own bulk downloads want the *same* rich specs, would be reused by
-#' any future favorites bulk action that also needs history logging --
-#' [favorites_build_raw_xlsx()]/[favorites_build_thinkcell_xlsx()]
-#' deliberately build their own much simpler specs instead, since neither
-#' is logged to Export History (see their own docs for why).
-#' @param entries Favorites to include; defaults to every saved favorite.
+#' Look up a favorite's chart in the current session's live registry (see
+#' `tc_chart_registry_get()` in `utils/slide_download.R`) and pull its
+#' current exportable state. `NULL` when the chart isn't live this session,
+#' or is faceted (the same scope limitation snapshotting always had --
+#' faceted charts were never capturable either) -- there is no snapshot
+#' fallback (see the file header). Shared by every live-rebuild path below.
+#' @param entry A favorite entry (as returned by [favorites_list()]).
+#' @param session The Shiny session driving this download.
+favorites_live_spec_or_null <- function(entry, session) {
+  reg <- tc_chart_registry_get(session, tc_or(entry$module_id, ""))
+  if (is.null(reg)) return(NULL)
+  spec <- tryCatch(reg$get_spec(), error = function(e) NULL)
+  if (is.null(spec) || isTRUE(spec$is_faceted)) return(NULL)
+  spec
+}
+
+#' Live `list(label, tc_table, raw_table)` for one favorite -- for the plain
+#' xlsx bulk buttons ([favorites_build_thinkcell_xlsx()]/
+#' [favorites_build_raw_xlsx()]), which need today's tables but no template
+#' resolution or history logging. `NULL` when [favorites_live_spec_or_null()]
+#' returns `NULL` (the caller skips it).
+#' @param entry A favorite entry.
+#' @param session The Shiny session driving this download.
+favorites_prepare_live_table <- function(entry, session) {
+  spec <- favorites_live_spec_or_null(entry, session)
+  if (is.null(spec)) return(NULL)
+  list(
+    label = tc_or(entry$label, "favorite"),
+    tc_table = as.data.frame(tc_or(spec$slide_matrix, spec$tc_data), stringsAsFactors = FALSE, check.names = FALSE),
+    raw_table = if (!is.null(spec$raw_data)) as.data.frame(spec$raw_data, stringsAsFactors = FALSE, check.names = FALSE) else NULL
+  )
+}
+
+#' Live [tc_build_deck_from_specs()]-shaped spec for one favorite -- for the
+#' slide-producing bulk buttons ([favorites_build_deck_zip()]/
+#' [favorites_build_slides_zip()]). Mirrors
+#' `export_history_prepare_regenerate_spec()`'s live branch
+#' (`utils/export_history.R`) almost exactly: logs a fresh Export History
+#' entry from today's data (only when a matching template exists, same
+#' condition this function always used), resolves the template, and builds
+#' the datasheet corner-cell log. `NULL` when
+#' [favorites_live_spec_or_null()] returns `NULL` (the caller skips it -- no
+#' snapshot fallback).
+#' @param entry A favorite entry.
+#' @param session The Shiny session driving this download.
+#' @param favorite_download_id Shared id for this whole bulk click (see
+#'   [favorites_download_new_id()]).
+#' @param batch_created_at Shared timestamp for this whole bulk click.
 #' @param templates_dir Optional templates directory override (mainly for tests).
-#' @return List of specs, possibly empty.
-favorites_build_specs_with_history <- function(entries = NULL, templates_dir = NULL) {
+#' @param captured_image Optional data-URI from this session's bulk-capture
+#'   round (see `TC_CHART_CAPTURE_JS`'s `.tc-regenerate-go-btn` handler), for
+#'   this entry's own module; `NULL` if none was captured.
+favorites_prepare_live_spec <- function(entry, session, favorite_download_id = NULL,
+                                         batch_created_at = NULL, templates_dir = NULL,
+                                         captured_image = NULL) {
+  live_spec <- favorites_live_spec_or_null(entry, session)
+  if (is.null(live_spec)) return(NULL)
+
+  tpl_path <- tc_template_for_chart_type(
+    live_spec$chart_type, templates_dir = templates_dir,
+    override = tc_or(live_spec$template_override, "")
+  )
+
+  download_id <- NA_character_
+  if (!is.na(tpl_path)) {
+    history_entry <- tc_history_capture(
+      tc_data           = live_spec$tc_data,
+      chart_type        = live_spec$chart_type,
+      slide_matrix      = live_spec$slide_matrix,
+      slide_title       = live_spec$slide_title,
+      figure_title      = live_spec$figure_title,
+      template_override = live_spec$template_override,
+      slide_order       = live_spec$slide_order,
+      dashboard_title   = live_spec$dashboard_title,
+      tab_label         = live_spec$tab_label,
+      subtab_label      = live_spec$subtab_label,
+      selections        = live_spec$selections,
+      source_output     = live_spec$source_output,
+      source_sheet      = live_spec$source_sheet,
+      source_mtime      = live_spec$source_mtime,
+      favorite_download_id = favorite_download_id,
+      module_id         = tc_or(entry$module_id, ""),
+      filename_prefix   = live_spec$filename_prefix,
+      templates_dir     = templates_dir
+    )
+    history_entry$id <- export_history_new_id()
+    if (!is.null(batch_created_at)) history_entry$created_at <- batch_created_at
+    download_id <- export_history_add(history_entry)
+  }
+
+  datasheet_log <- tc_build_datasheet_log(
+    dashboard_title = tc_or(live_spec$dashboard_title, ""),
+    tab_label       = tc_or(live_spec$tab_label, ""),
+    subtab_label    = tc_or(live_spec$subtab_label, ""),
+    chart_type      = live_spec$chart_type,
+    selections      = live_spec$selections,
+    chart_id        = if (is.na(download_id)) NULL else download_id,
+    favorite_download_id = favorite_download_id,
+    source_output   = tc_or(live_spec$source_output, ""),
+    source_sheet    = tc_or(live_spec$source_sheet, ""),
+    source_mtime    = tc_or(live_spec$source_mtime, "")
+  )
+
+  # entry$label (the favorite's own display name, resolved once at star
+  # time) wins over the chart's *current* title, so the name in the
+  # favorites list and the name on the download always match -- falling
+  # back to the live title chain only if a favorite somehow has no label.
+  label <- tc_or(
+    Find(function(x) !is.null(x) && nzchar(x),
+         list(entry$label, live_spec$figure_title, live_spec$slide_title,
+              entry$subtab_label, live_spec$filename_prefix)),
+    "favorite"
+  )
+  slide_matrix <- tc_or(live_spec$slide_matrix, live_spec$tc_data)
+  asset_path <- if (is.na(download_id)) NULL else export_history_asset_path(download_id)
+  if (!is.null(asset_path)) tc_write_captured_asset(captured_image, asset_path)
+
+  list(
+    label = label,
+    tc_table = as.data.frame(slide_matrix, stringsAsFactors = FALSE, check.names = FALSE),
+    raw_table = if (!is.null(live_spec$raw_data)) as.data.frame(live_spec$raw_data, stringsAsFactors = FALSE, check.names = FALSE) else NULL,
+    chart_type = live_spec$chart_type,
+    template_path = tpl_path,
+    slide_title = live_spec$slide_title,
+    figure_title = live_spec$figure_title,
+    download_id = if (is.na(download_id)) NULL else download_id,
+    favorite_download_id = favorite_download_id,
+    datasheet_log = datasheet_log,
+    asset_path = asset_path
+  )
+}
+
+#' Build the rich, [tc_build_deck_from_specs()]-shaped spec list for every
+#' *live* favorite (see the file header), auto-logging each renderable one
+#' to Export History (`utils/export_history.R`) along the way -- all sharing
+#' one fresh `favorite_download_id` (see [favorites_download_new_id()]) so a
+#' whole click can be found and regenerated together later, and one fresh
+#' `download_id` each. A favorite whose chart isn't live this session is
+#' skipped rather than replayed from a snapshot -- its label is returned in
+#' `skipped` so callers can notify the user.
+#' Shared by [favorites_build_deck_zip()] and [favorites_build_slides_zip()].
+#' @param entries Favorites to include; defaults to every saved favorite.
+#' @param session The Shiny session driving this download.
+#' @param templates_dir Optional templates directory override (mainly for tests).
+#' @param captures Named list of data-URIs from this session's bulk-capture
+#'   round (see `TC_CHART_CAPTURE_JS`'s `.tc-regenerate-go-btn` handler),
+#'   keyed by `module_id`.
+#' @return `list(specs, skipped)` -- `skipped` is a character vector of
+#'   labels for favorites whose chart wasn't live this session.
+favorites_build_specs_with_history <- function(entries = NULL, session, templates_dir = NULL, captures = list()) {
   entries <- tc_or(entries, favorites_list())
-  if (length(entries) == 0) return(list())
+  if (length(entries) == 0) return(list(specs = list(), skipped = character(0)))
 
   favorite_download_id <- favorites_download_new_id()
   # One shared timestamp for every entry logged from this click, rather than
@@ -559,129 +620,85 @@ favorites_build_specs_with_history <- function(entries = NULL, templates_dir = N
   # see export_history_add()'s created_at handling.
   batch_created_at <- tc_now()
 
-  labels <- sanitize_excel_sheet_names(
-    vapply(entries, function(e) tc_or(e$label, "favorite"), character(1))
-  )
-
-  lapply(seq_along(entries), function(i) {
-    e <- entries[[i]]
-    tpl_path <- tc_template_for_chart_type(
-      e$chart_type, templates_dir = templates_dir, override = tc_or(e$template_name, "")
-    )
-
-    download_id <- NA_character_
-    if (!is.na(tpl_path)) {
-      history_entry <- tc_history_capture(
-        tc_data           = favorites_table_as_df(e$tc_table),
-        chart_type        = e$chart_type,
-        slide_matrix      = favorites_table_as_df(e$tc_table),
-        slide_title       = tc_or(e$slide_title, ""),
-        figure_title      = tc_or(e$figure_title, ""),
-        template_override = tc_or(e$template_name, ""),
-        slide_order       = tc_or(e$slide_order, "auto"),
-        dashboard_title   = tc_or(e$dashboard_title, ""),
-        tab_label         = tc_or(e$tab_label, ""),
-        subtab_label      = tc_or(e$subtab_label, ""),
-        selections        = e$selections,
-        source_output     = tc_or(e$source_output, ""),
-        source_sheet      = tc_or(e$source_sheet, ""),
-        source_mtime      = tc_or(e$source_mtime, ""),
-        favorite_download_id = favorite_download_id,
-        module_id         = tc_or(e$module_id, ""),
-        filename_prefix   = tc_or(e$filename_prefix, "chart"),
-        templates_dir     = templates_dir
-      )
-      history_entry$id         <- export_history_new_id()
-      history_entry$created_at <- batch_created_at
-      download_id <- export_history_add(history_entry)
-    }
-
-    datasheet_log <- tc_build_datasheet_log(
-      dashboard_title = tc_or(e$dashboard_title, ""),
-      tab_label       = tc_or(e$tab_label, ""),
-      subtab_label    = tc_or(e$subtab_label, ""),
-      chart_type      = e$chart_type,
-      selections      = e$selections,
-      chart_id        = if (is.na(download_id)) NULL else download_id,
-      favorite_download_id = favorite_download_id,
-      source_output   = tc_or(e$source_output, ""),
-      source_sheet    = tc_or(e$source_sheet, ""),
-      source_mtime    = tc_or(e$source_mtime, "")
-    )
-
-    list(
-      label = labels[[i]],
-      tc_table = favorites_table_as_df(e$tc_table),
-      raw_table = if (!is.null(e$raw_table)) favorites_table_as_df(e$raw_table) else NULL,
-      chart_type = e$chart_type,
-      template_path = tpl_path,
-      slide_title = tc_or(e$slide_title, ""),
-      figure_title = tc_or(e$figure_title, ""),
-      download_id = if (is.na(download_id)) NULL else download_id,
-      favorite_download_id = favorite_download_id,
-      datasheet_log = datasheet_log,
-      asset_path = if (!is.null(e$id) && nzchar(tc_or(e$id, ""))) favorite_asset_path(e$id) else NULL
+  results <- lapply(entries, function(e) {
+    favorites_prepare_live_spec(
+      e, session, favorite_download_id = favorite_download_id,
+      batch_created_at = batch_created_at, templates_dir = templates_dir,
+      captured_image = captures[[tc_or(e$module_id, "")]]
     )
   })
+
+  is_skipped <- vapply(results, is.null, logical(1))
+  list(
+    specs = Filter(Negate(is.null), results),
+    skipped = vapply(entries[is_skipped], function(e) tc_or(e$label, "favorite"), character(1))
+  )
 }
 
-#' Build one combined ZIP (data + slide deck) from every saved favorite --
-#' see [favorites_build_specs_with_history()] for the history-logging spec
+#' Build one combined ZIP (data + slide deck) from every live favorite --
+#' see [favorites_build_specs_with_history()] for the live-spec-building
 #' this feeds [tc_build_deck_from_specs()].
 #' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
 #' @param entries Favorites to include; defaults to every saved favorite.
+#' @param session The Shiny session driving this download.
 #' @param ppttc_exe Optional override for the think-cell executable.
 #' @param templates_dir Optional templates directory override (mainly for tests).
-favorites_build_deck_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL, templates_dir = NULL) {
-  specs <- favorites_build_specs_with_history(entries, templates_dir)
-  tc_build_deck_from_specs(specs, zip_path, ppttc_exe)
+#' @param captures Named list of data-URIs, keyed by `module_id` (see
+#'   [favorites_build_specs_with_history()]).
+#' @return Character vector of skipped favorites' labels (invisibly).
+favorites_build_deck_zip <- function(zip_path, entries = NULL, session, ppttc_exe = NULL,
+                                      templates_dir = NULL, captures = list()) {
+  result <- favorites_build_specs_with_history(entries, session, templates_dir, captures)
+  tc_build_deck_from_specs(result$specs, zip_path, ppttc_exe)
+  invisible(result$skipped)
 }
 
-#' Build just the slide-deck ZIP (no data workbooks) from every saved
+#' Build just the slide-deck ZIP (no data workbooks) from every live
 #' favorite -- Favorites' "Download slides" bulk button, one of three
 #' separate, consistently-named bulk downloads (mirroring a single chart's
-#' own raw/think-cell/slide split) that replaced one single combined
-#' "Download all favorites" click. Still logged to Export History, same
-#' history-logging spec as [favorites_build_deck_zip()].
-#' @param zip_path Output `.zip` path (the `file` handed in by downloadHandler).
-#' @param entries Favorites to include; defaults to every saved favorite.
-#' @param ppttc_exe Optional override for the think-cell executable.
-#' @param templates_dir Optional templates directory override (mainly for tests).
-favorites_build_slides_zip <- function(zip_path, entries = NULL, ppttc_exe = NULL, templates_dir = NULL) {
-  specs <- favorites_build_specs_with_history(entries, templates_dir)
-  tc_build_slide_deck_zip(specs, zip_path, ppttc_exe)
+#' own raw/think-cell/slide split). Still logged to Export History, same
+#' live-spec-building as [favorites_build_deck_zip()].
+#' @inheritParams favorites_build_deck_zip
+#' @return Character vector of skipped favorites' labels (invisibly).
+favorites_build_slides_zip <- function(zip_path, entries = NULL, session, ppttc_exe = NULL,
+                                        templates_dir = NULL, captures = list()) {
+  result <- favorites_build_specs_with_history(entries, session, templates_dir, captures)
+  tc_build_slide_deck_zip(result$specs, zip_path, ppttc_exe)
+  invisible(result$skipped)
 }
 
 #' Build the combined think-cell-shaped workbook (bare `.xlsx`, no zip) for
-#' every saved favorite -- Favorites' "Download Excel data (think-cell
-#' formatted)" bulk button. Not logged to Export History (see
-#' [tc_build_thinkcell_xlsx_from_specs()] for why) -- deliberately builds a
-#' much simpler spec than [favorites_build_specs_with_history()] since none
-#' of that function's template-resolution/history-logging work is needed
-#' just to write a table.
+#' every live favorite -- Favorites' "Download Excel data (think-cell
+#' formatted)" bulk button. Not logged to Export History (matches the
+#' single-chart "Download data (think-cell)" button's own convention -- only
+#' a *slide* download is audited) -- deliberately builds a much simpler spec
+#' than [favorites_build_specs_with_history()] since none of that function's
+#' template-resolution/history-logging work is needed just to write a table.
 #' @param path Output `.xlsx` path (the `file` handed in by downloadHandler).
 #' @param entries Favorites to include; defaults to every saved favorite.
-favorites_build_thinkcell_xlsx <- function(path, entries = NULL) {
+#' @param session The Shiny session driving this download.
+#' @return Character vector of skipped favorites' labels (invisibly).
+favorites_build_thinkcell_xlsx <- function(path, entries = NULL, session) {
   entries <- tc_or(entries, favorites_list())
-  specs <- lapply(entries, function(e) list(
-    label = tc_or(e$label, "favorite"),
-    tc_table = favorites_table_as_df(e$tc_table)
-  ))
-  tc_build_thinkcell_xlsx_from_specs(specs, path)
+  results <- lapply(entries, favorites_prepare_live_table, session = session)
+  is_skipped <- vapply(results, is.null, logical(1))
+  tc_build_thinkcell_xlsx_from_specs(Filter(Negate(is.null), results), path)
+  invisible(vapply(entries[is_skipped], function(e) tc_or(e$label, "favorite"), character(1)))
 }
 
-#' Build the combined raw-data workbook (bare `.xlsx`, no zip) for every
-#' saved favorite -- Favorites' "Download Excel data (raw)" bulk button. Not
+#' Build the combined raw-data workbook (bare `.xlsx`, no zip) for every live
+#' favorite -- Favorites' "Download Excel data (raw)" bulk button. Not
 #' logged to Export History, same reasoning as [favorites_build_thinkcell_xlsx()].
 #' @param path Output `.xlsx` path (the `file` handed in by downloadHandler).
 #' @param entries Favorites to include; defaults to every saved favorite.
-favorites_build_raw_xlsx <- function(path, entries = NULL) {
+#' @param session The Shiny session driving this download.
+#' @return Character vector of skipped favorites' labels (invisibly).
+favorites_build_raw_xlsx <- function(path, entries = NULL, session) {
   entries <- tc_or(entries, favorites_list())
-  specs <- lapply(entries, function(e) list(
-    label = tc_or(e$label, "favorite"),
-    raw_table = if (!is.null(e$raw_table)) favorites_table_as_df(e$raw_table) else NULL
-  ))
-  tc_build_raw_xlsx_from_specs(specs, path)
+  results <- lapply(entries, favorites_prepare_live_table, session = session)
+  is_skipped <- vapply(results, is.null, logical(1))
+  tc_build_raw_xlsx_from_specs(Filter(Negate(is.null), results), path)
+  invisible(vapply(entries[is_skipped], function(e) tc_or(e$label, "favorite"), character(1)))
 }
 
 #' Compact, single-line rendering of a favorite's option selections for the
@@ -723,16 +740,18 @@ favorites_panel_ui <- function(id, intro = NULL) {
     shiny::p(class = "text-muted", tc_or(
       intro,
       paste0(
-        "Shared across everyone using this dashboard — starring a chart saves ",
-        "a snapshot of its current export here."
+        "Shared across everyone using this dashboard — starring a chart bookmarks ",
+        "it here. Every download below rebuilds live from today's data; a favorite ",
+        "whose chart isn't currently open in your session is skipped."
       )
     )),
     shiny::downloadButton(ns("download_all_raw"), "Download Excel data (raw)", class = "btn-default"),
     shiny::downloadButton(ns("download_all_thinkcell"), "Download Excel data (think-cell formatted)", class = "btn-primary"),
-    shiny::downloadButton(ns("download_all_slides"), "Download slides", class = "btn-primary"),
+    shiny::uiOutput(ns("slides_download_control"), inline = TRUE),
     shiny::actionButton(ns("remove_all"), "Remove all", class = "btn-default"),
     shiny::tags$hr(),
-    shiny::uiOutput(ns("list"))
+    shiny::uiOutput(ns("list")),
+    shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS))
   )
 }
 
@@ -822,33 +841,91 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
       })
     })
 
+    # Surfaced after any bulk download that skipped favorites whose chart
+    # isn't live in this session (see favorites_live_spec_or_null() in
+    # utils/favorites.R) -- there is no snapshot fallback, so this is the
+    # only feedback the user gets when a favorite comes up empty.
+    notify_skipped <- function(skipped, total) {
+      if (length(skipped) == 0) return(invisible(NULL))
+      shiny::showNotification(
+        sprintf(
+          "Skipped %d of %d favorite(s) — their chart isn't currently open in this session: %s",
+          length(skipped), total, paste(skipped, collapse = ", ")
+        ),
+        type = "warning", duration = 8
+      )
+    }
+
     output$download_all_raw <- shiny::downloadHandler(
       filename = function() paste0("favorites_raw_", Sys.Date(), ".xlsx"),
       content = function(file) {
-        favorites_build_raw_xlsx(file, entries = entries_reactive())
+        entries <- entries_reactive()
+        skipped <- favorites_build_raw_xlsx(file, entries = entries, session = session)
+        notify_skipped(skipped, length(entries))
       }
     )
 
     output$download_all_thinkcell <- shiny::downloadHandler(
       filename = function() paste0("favorites_thinkcell_", Sys.Date(), ".xlsx"),
       content = function(file) {
-        favorites_build_thinkcell_xlsx(file, entries = entries_reactive())
+        entries <- entries_reactive()
+        skipped <- favorites_build_thinkcell_xlsx(file, entries = entries, session = session)
+        notify_skipped(skipped, length(entries))
       }
     )
+
+    # "Download slides" needs a fresh screenshot of every live chart before
+    # the ZIP is built (so charts_overview.html isn't stale) -- same
+    # actionButton + hidden-downloadButton + TC_CHART_CAPTURE_JS pattern
+    # Export History's "Regenerate selected" already uses (see
+    # utils/export_history.R's selection_banner). Rendered via renderUI
+    # (rather than a static button in favorites_panel_ui()) so
+    # data-module-ids always reflects the current favorites list.
+    output$slides_download_control <- shiny::renderUI({
+      module_ids <- unique(Filter(nzchar, vapply(
+        entries_reactive(), function(e) tc_or(e$module_id, ""), character(1)
+      )))
+      shiny::tagList(
+        shiny::actionButton(
+          session$ns("download_all_slides_go"), "Download slides",
+          class = "btn-primary tc-regenerate-go-btn",
+          `data-module-ids` = jsonlite::toJSON(module_ids),
+          `data-capture-input-id` = session$ns("slides_capture")
+        ),
+        shiny::tags$span(
+          style = "display:none;",
+          shiny::downloadButton(session$ns("download_all_slides"), "")
+        )
+      )
+    })
+
+    pending_slides_capture <- shiny::reactiveVal(list())
+    shiny::observeEvent(input$slides_capture, {
+      pending_slides_capture(tc_or(input$slides_capture$captures, list()))
+      session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("download_all_slides")))
+    }, ignoreInit = TRUE)
 
     output$download_all_slides <- shiny::downloadHandler(
       filename = function() paste0("favorites_slides_", Sys.Date(), ".zip"),
       content = function(file) {
-        favorites_build_slides_zip(file, entries = entries_reactive())
+        entries <- entries_reactive()
+        skipped <- favorites_build_slides_zip(
+          file, entries = entries, session = session, captures = pending_slides_capture()
+        )
+        notify_skipped(skipped, length(entries))
       }
     )
+    # This download link lives inside a `display:none` wrapper (see
+    # output$slides_download_control above) -- see the matching note in
+    # utils/chart_downloads.R's own output$slide for why this is required.
+    shiny::outputOptions(output, "download_all_slides", suspendWhenHidden = FALSE)
 
     shiny::observeEvent(input$remove_all, {
       n <- length(entries_reactive())
       scope <- if (is.null(tab_label_filter)) {
-        "every saved favorite (and its snapshot image) for everyone using this dashboard"
+        "every saved favorite for everyone using this dashboard"
       } else {
-        sprintf("all %d favorite(s) starred from this tab (and their snapshot images)", n)
+        sprintf("all %d favorite(s) starred from this tab", n)
       }
       shiny::showModal(shiny::modalDialog(
         title = "Remove all favorites?",

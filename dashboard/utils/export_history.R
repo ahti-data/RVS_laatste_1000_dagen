@@ -46,25 +46,25 @@ export_history_new_id <- function() {
 
 #' Directory holding every export's captured PNG snapshot -- sibling to
 #' `export_history_dir()`, same "state/ is runtime-only, never deployed"
-#' treatment as `favorites_assets_dir()`.
+#' treatment as everything else under `state/`.
 export_history_assets_dir <- function() {
   file.path(dirname(export_history_dir()), "export_history_assets")
 }
 
-#' Path an export's PNG snapshot would live at, whether or not it exists yet
-#' -- mirrors [favorite_asset_path()]. Used to embed a `charts_overview.html`
-#' (see [tc_build_charts_overview_html()] in `utils/favorites.R`) into every
-#' export's ZIP, not just a bulk favorites download's.
+#' Path an export's PNG snapshot would live at, whether or not it exists yet.
+#' Used to embed a `charts_overview.html` (see [tc_build_charts_overview_html()]
+#' in `utils/favorites.R`) into every export's ZIP -- including a live
+#' favorites bulk download's, which mints its own fresh history entry (and
+#' thus its own asset path) per chart, same as any other export.
 #' @param id A history entry's own id.
 export_history_asset_path <- function(id) {
   file.path(export_history_assets_dir(), paste0(id, ".png"))
 }
 
-#' Decode a `data:image/png;base64,...` URI (as sent by `TC_CHART_CAPTURE_JS`
-#' /`TC_FAVORITE_CAPTURE_JS`) and write it to `path`. A no-op -- not an error
-#' -- when `image` is `NULL`/empty or fails to decode, since a missing
-#' snapshot only means that chart's overview page is absent from the ZIP,
-#' never a broken export.
+#' Decode a `data:image/png;base64,...` URI (as sent by `TC_CHART_CAPTURE_JS`)
+#' and write it to `path`. A no-op -- not an error -- when `image` is
+#' `NULL`/empty or fails to decode, since a missing snapshot only means that
+#' chart's overview page is absent from the ZIP, never a broken export.
 #' @param image The data-URI string, or `NULL`.
 #' @param path Destination `.png` path (see [export_history_asset_path()]).
 tc_write_captured_asset <- function(image, path) {
@@ -84,8 +84,7 @@ tc_write_captured_asset <- function(image, path) {
 #' session, or the client-side capture round found nothing) but an older
 #' snapshot exists, so the regenerated entry's ZIP still gets an overview
 #' page rather than none at all.
-#' @param path A `.png` path (e.g. from [export_history_asset_path()] or
-#'   `favorite_asset_path()`).
+#' @param path A `.png` path (e.g. from [export_history_asset_path()]).
 #' @return The data-URI string, or `NULL` if `path` doesn't exist/is unreadable.
 tc_read_asset_as_data_uri <- function(path) {
   if (is.null(path) || !file.exists(path)) return(NULL)

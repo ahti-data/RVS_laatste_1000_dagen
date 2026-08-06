@@ -113,6 +113,23 @@ test_that("a valid upload lands in templates/custom/ and is listed with preceden
   expect_true(grepl("custom", resolved, fixed = TRUE))
 })
 
+test_that("repeated sequential uploads still succeed under the new file lock", {
+  # tmpl_save_upload()'s copy step now runs under tc_with_file_lock() (see
+  # utils/slide_download.R); if the lock weren't released after each call,
+  # a later call in the same process would hang/time out rather than fail
+  # an assertion.
+  templates_dir <- tempfile("templates_")
+  dir.create(templates_dir)
+
+  for (i in 1:3) {
+    tmp_upload <- tempfile(fileext = ".pptx")
+    make_fake_pptx(tmp_upload)
+    res <- tmpl_save_upload(tmp_upload, sprintf("deck_%d.pptx", i), templates_dir)
+    expect_true(res$ok)
+  }
+  expect_setequal(tc_list_templates(templates_dir), c("deck_1.pptx", "deck_2.pptx", "deck_3.pptx"))
+})
+
 test_that("uploads survive being listed even when no custom dir exists yet", {
   templates_dir <- tempfile("templates_")
   dir.create(templates_dir)
