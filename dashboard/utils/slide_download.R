@@ -42,15 +42,40 @@ tc_now <- function(fmt = "%Y-%m-%d %H:%M:%S") {
 #' state file (`favorites.json`, a template upload) don't race each other.
 #' Locks a sidecar rather than `path` itself so readers that don't go through
 #' this helper are never blocked.
+#'
+#' Degrades to running `fn()` unlocked (with a `warning()`, never an error)
+#' if the `filelock` package isn't installed or a lock can't be acquired in
+#' time -- this repo deploys via a plain file copy with no package-install
+#' step (see `.github/workflows/deploy.yml`), so a server that never had
+#' `filelock` installed must not have every favorite star/unstar crash the
+#' user's session; losing lock protection on rare contention is a far better
+#' failure mode than that.
 #' @param path The shared file (or directory) being protected; the actual
 #'   lock file is `paste0(path, ".lock")`.
 #' @param fn Zero-arg function to run while holding the lock.
 #' @param timeout Milliseconds to wait for the lock before giving up.
 tc_with_file_lock <- function(path, fn, timeout = 10000) {
+  if (!requireNamespace("filelock", quietly = TRUE)) {
+    warning(
+      "Package 'filelock' is not installed -- running '", path, "' update ",
+      "without a lock. Install it (install.packages(\"filelock\")) to ",
+      "prevent lost updates under concurrent use.",
+      call. = FALSE
+    )
+    return(fn())
+  }
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  lock <- filelock::lock(paste0(path, ".lock"), timeout = timeout)
+  lock <- tryCatch(
+    filelock::lock(paste0(path, ".lock"), timeout = timeout),
+    error = function(e) NULL
+  )
   if (is.null(lock)) {
-    stop("Could not acquire lock on ", path, " within ", timeout, "ms.")
+    warning(
+      "Could not acquire a lock on '", path, "' within ", timeout,
+      "ms -- running the update without one.",
+      call. = FALSE
+    )
+    return(fn())
   }
   on.exit(filelock::unlock(lock))
   fn()

@@ -36,6 +36,39 @@ test_that("tc_with_file_lock still releases the lock when fn errors", {
   expect_equal(tc_with_file_lock(path, function() "ok"), "ok")
 })
 
+test_that("tc_with_file_lock degrades to running fn unlocked when filelock isn't installed", {
+  # filelock is a new dependency introduced alongside this helper, but this
+  # project deploys via a plain file copy with no package-install step (see
+  # the note on tc_with_file_lock() itself) -- a server that never had it
+  # installed must not have every locked update crash the caller's session.
+  # requireNamespace() is looked up via tc_with_file_lock()'s own enclosing
+  # environment chain, which bottoms out at globalenv() (since this is a
+  # sourced script, not a package) before reaching base -- assigning a
+  # shadow directly into globalenv() intercepts that one call without
+  # touching testthat's own (namespaced) internals. `<<-` won't do this: it
+  # walks up to wherever the name already exists (base, which is locked)
+  # instead of creating a new binding in globalenv().
+  assign("requireNamespace", function(package, ...) FALSE, envir = globalenv())
+  on.exit(rm("requireNamespace", envir = globalenv()), add = TRUE)
+
+  expect_warning(
+    result <- tc_with_file_lock(tempfile("lock_target_"), function() "ran anyway"),
+    "filelock"
+  )
+  expect_equal(result, "ran anyway")
+})
+
+test_that("tc_with_file_lock still runs fn when a lock can't be acquired", {
+  skip_if_not_installed("filelock")
+  testthat::local_mocked_bindings(lock = function(...) NULL, .package = "filelock")
+
+  expect_warning(
+    result <- tc_with_file_lock(tempfile("lock_target_"), function() "ran anyway"),
+    "Could not acquire"
+  )
+  expect_equal(result, "ran anyway")
+})
+
 test_that("chart types map to the correct template (or none)", {
   expect_true(tc_chart_type_has_template("line"))
   expect_true(tc_chart_type_has_template("grouped_bar"))
