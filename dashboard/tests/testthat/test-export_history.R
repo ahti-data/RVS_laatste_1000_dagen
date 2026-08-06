@@ -101,6 +101,7 @@ test_that("tc_history_capture resolves the template and a sensible label", {
   expect_false(is.na(entry$template_name))
   expect_equal(entry$tc_data_table$columns[1], "")
   expect_null(entry$slide_matrix_table)
+  expect_null(entry$raw_data_table)
 })
 
 test_that("tc_history_capture stores slide_matrix separately when supplied", {
@@ -114,6 +115,17 @@ test_that("tc_history_capture stores slide_matrix separately when supplied", {
   expect_false(is.null(entry$slide_matrix_table))
   restored <- favorites_table_as_df(entry$slide_matrix_table)
   expect_equal(restored[[1]], "X")
+})
+
+test_that("tc_history_capture stores raw_data separately when supplied", {
+  raw_df <- data.frame(category = "X", value = 1, stringsAsFactors = FALSE)
+  entry <- tc_history_capture(
+    tc_data = sample_matrix(), chart_type = "line", raw_data = raw_df,
+    filename_prefix = "chart"
+  )
+  expect_false(is.null(entry$raw_data_table))
+  restored <- favorites_table_as_df(entry$raw_data_table)
+  expect_equal(restored$category, "X")
 })
 
 test_that("tc_history_capture stores favorite_download_id and module_id", {
@@ -151,6 +163,23 @@ test_that("export_history_redownload rebuilds a zip carrying the entry's chart_i
   ppttc <- paste(readLines(file.path(extract_dir, "chart_data.ppttc")), collapse = "\n")
   expect_true(grepl("download_id=exp_redownload_test", ppttc, fixed = TRUE))
   expect_true(grepl('"string":"exp_redownload_test"', ppttc, fixed = TRUE))
+})
+
+test_that("export_history_redownload includes a companion _raw.xlsx when the entry has raw_data_table", {
+  skip_if_not(have_templates, "templates directory not available")
+  raw_df <- data.frame(category = "X", value = 1, stringsAsFactors = FALSE)
+  entry <- tc_history_capture(
+    tc_data = sample_matrix(), chart_type = "line", raw_data = raw_df,
+    dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+    filename_prefix = "revenue_chart", templates_dir = templates_dir
+  )
+  entry$id <- "exp_redownload_raw_test"
+
+  z <- tempfile(fileext = ".zip")
+  export_history_redownload(entry, z, templates_dir = templates_dir, ppttc_exe = NA)
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("revenue_chart_table.xlsx" %in% files)
+  expect_true("revenue_chart_raw.xlsx" %in% files)
 })
 
 test_that("export_history_redownload re-embeds a stored favorite_download_id", {
@@ -351,6 +380,56 @@ test_that("export_history_snapshot_spec builds a spec from an entry's frozen sna
     expect_equal(spec$favorite_download_id, "favdl_x")
     expect_equal(spec$figure_title, "Revenue chart")
     expect_true(grepl(paste0("download_id=", entry$id), spec$datasheet_log, fixed = TRUE))
+  })
+})
+
+test_that("export_history_snapshot_spec carries the entry's stored raw_data_table through as raw_table", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    raw_df <- data.frame(category = "X", value = 1, stringsAsFactors = FALSE)
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line", raw_data = raw_df,
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir
+    )
+    entry$id <- export_history_new_id()
+
+    spec <- export_history_snapshot_spec(entry, templates_dir = templates_dir)
+    expect_false(is.null(spec$raw_table))
+    expect_equal(spec$raw_table$category, "X")
+  })
+})
+
+test_that("export_history_prepare_regenerate_spec pulls raw_table from the live chart's current raw_data", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    entry <- tc_history_capture(
+      tc_data = sample_matrix(), chart_type = "line",
+      dashboard_title = "D", tab_label = "T", subtab_label = "Revenue",
+      filename_prefix = "revenue_chart", templates_dir = templates_dir,
+      module_id = "live_chart_raw_dl"
+    )
+    entry$id <- export_history_new_id()
+    export_history_add(entry)
+
+    session <- fake_session()
+    live_raw <- data.frame(category = "Y", value = 2, stringsAsFactors = FALSE)
+    tc_chart_registry_register(session, "live_chart_raw_dl", list(
+      build_zip = function(...) stop("not used in this test"),
+      get_spec = function() list(
+        tc_data = sample_matrix(), raw_data = live_raw, chart_type = "line",
+        slide_matrix = NULL, is_faceted = FALSE, slide_title = "", figure_title = "",
+        template_override = "", slide_order = "auto", dashboard_title = "D",
+        tab_label = "T", subtab_label = "Revenue", selections = list(),
+        source_output = "", source_sheet = "", source_mtime = "",
+        filename_prefix = "revenue_chart"
+      )
+    ))
+
+    res <- export_history_prepare_regenerate_spec(entry, session, templates_dir = templates_dir)
+    expect_true(res$live)
+    expect_false(is.null(res$spec$raw_table))
+    expect_equal(res$spec$raw_table$category, "Y")
   })
 })
 

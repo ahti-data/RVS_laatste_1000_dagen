@@ -972,6 +972,11 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
 #' @param zip_path Output .zip path (the `file` handed in by downloadHandler).
 #' @param tc_data think-cell matrix from [format_tc_data()] (a data frame, or a
 #'   named list of data frames for faceted charts).
+#' @param raw_data Optional raw (pre-think-cell-reshape) data frame -- the
+#'   same data the chart's own "Download data (raw)" button writes. When
+#'   supplied, written into the ZIP as `<prefix>_raw.xlsx` alongside the
+#'   think-cell `<prefix>_table.xlsx`. `NULL` (the default) omits it --
+#'   e.g. for callers replaying an older entry that never captured one.
 #' @param chart_type Resolved chart type of the displayed figure.
 #' @param slide_title,figure_title Optional titles bound in the template.
 #' @param dashboard_title,tab_label,subtab_label Log metadata.
@@ -1002,6 +1007,7 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
 tc_build_slide_zip <- function(zip_path,
                                tc_data,
                                chart_type,
+                               raw_data         = NULL,
                                slide_title      = "",
                                figure_title     = "",
                                dashboard_title  = "",
@@ -1053,6 +1059,15 @@ tc_build_slide_zip <- function(zip_path,
   # rendered slide sees the same order, not just the .pptx chart itself) ----
   table_path <- file.path(work, paste0(filename_prefix, "_table.xlsx"))
   write_table_fun(tc_reorder_by_categories(tc_data, names(slide_matrix)[-1]), table_path)
+
+  # ---- (2b) raw data (the exact data behind the plot, before think-cell
+  # reshaping -- same as the chart's own "Download data (raw)" button) ----
+  # optional: an older history entry replayed via export_history_redownload()
+  # may not have one captured.
+  if (!is.null(raw_data)) {
+    raw_path <- file.path(work, paste0(filename_prefix, "_raw.xlsx"))
+    write_table_fun(raw_data, raw_path)
+  }
 
   rendered <- FALSE
 

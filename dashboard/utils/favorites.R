@@ -530,6 +530,7 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
       tc_data           = live_spec$tc_data,
       chart_type        = live_spec$chart_type,
       slide_matrix      = live_spec$slide_matrix,
+      raw_data          = live_spec$raw_data,
       slide_title       = live_spec$slide_title,
       figure_title      = live_spec$figure_title,
       template_override = live_spec$template_override,

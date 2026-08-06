@@ -167,6 +167,11 @@ export_history_remove <- function(id) {
 #'   [tc_prepare_slide()]), not necessarily the chart's declared type.
 #' @param slide_matrix Optional pre-oriented matrix for the slide/`.ppttc`
 #'   itself, when it differs from `tc_data` (see [tc_build_slide_zip()]).
+#' @param raw_data Optional raw (pre-think-cell-reshape) data frame -- the
+#'   same data the chart's own "Download data (raw)" button writes. Stored
+#'   so a later redownload/regenerate can also ship a `<prefix>_raw.xlsx`
+#'   alongside the think-cell one (see [tc_build_slide_zip()]). `NULL` when
+#'   unavailable (e.g. legacy entries, or the caller never had it).
 #' @param slide_title,figure_title Resolved slide text.
 #' @param template_override The resolved template choice (manual or
 #'   auto-detected name/path) actually used, so a later redownload reproduces
@@ -189,7 +194,7 @@ export_history_remove <- function(id) {
 #' @param templates_dir Optional templates directory override (mainly for tests).
 #' @return A list ready for [export_history_add()].
 tc_history_capture <- function(
-    tc_data, chart_type, slide_matrix = NULL,
+    tc_data, chart_type, slide_matrix = NULL, raw_data = NULL,
     slide_title = "", figure_title = "", template_override = "", slide_order = "auto",
     dashboard_title = "", tab_label = "", subtab_label = "",
     selections = NULL, source_output = NULL, source_sheet = NULL, source_mtime = NULL,
@@ -223,7 +228,8 @@ tc_history_capture <- function(
     slide_title       = slide_title,
     figure_title      = figure_title,
     tc_data_table     = favorites_table_to_storage(tc_data),
-    slide_matrix_table = if (!is.null(slide_matrix)) favorites_table_to_storage(slide_matrix) else NULL
+    slide_matrix_table = if (!is.null(slide_matrix)) favorites_table_to_storage(slide_matrix) else NULL,
+    raw_data_table    = if (!is.null(raw_data)) favorites_table_to_storage(raw_data) else NULL
   )
 }
 
@@ -238,6 +244,11 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
     chart_type        = entry$chart_type,
     slide_matrix      = if (!is.null(entry$slide_matrix_table)) {
       favorites_table_as_df(entry$slide_matrix_table)
+    } else {
+      NULL
+    },
+    raw_data          = if (!is.null(entry$raw_data_table)) {
+      favorites_table_as_df(entry$raw_data_table)
     } else {
       NULL
     },
@@ -347,6 +358,7 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
       tc_data           = live_spec$tc_data,
       chart_type        = live_spec$chart_type,
       slide_matrix      = live_spec$slide_matrix,
+      raw_data          = live_spec$raw_data,
       slide_title       = live_spec$slide_title,
       figure_title      = live_spec$figure_title,
       template_override = live_spec$template_override,
@@ -396,7 +408,11 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
     return(list(live = TRUE, spec = list(
       label = label,
       tc_table = as.data.frame(slide_matrix, stringsAsFactors = FALSE, check.names = FALSE),
-      raw_table = NULL,
+      raw_table = if (!is.null(live_spec$raw_data)) {
+        as.data.frame(live_spec$raw_data, stringsAsFactors = FALSE, check.names = FALSE)
+      } else {
+        NULL
+      },
       chart_type = live_spec$chart_type,
       template_path = tpl_path,
       slide_title = live_spec$slide_title,
@@ -439,7 +455,11 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
   list(live = FALSE, spec = list(
     label = tc_or(new_entry$label, "chart"),
     tc_table = slide_matrix,
-    raw_table = NULL,
+    raw_table = if (!is.null(new_entry$raw_data_table)) {
+      favorites_table_as_df(new_entry$raw_data_table)
+    } else {
+      NULL
+    },
     chart_type = new_entry$chart_type,
     template_path = tpl_path,
     slide_title = tc_or(new_entry$slide_title, ""),
@@ -482,7 +502,11 @@ export_history_snapshot_spec <- function(entry, templates_dir = NULL) {
   list(
     label             = tc_or(entry$label, "chart"),
     tc_table          = slide_matrix,
-    raw_table         = NULL,
+    raw_table         = if (!is.null(entry$raw_data_table)) {
+      favorites_table_as_df(entry$raw_data_table)
+    } else {
+      NULL
+    },
     chart_type        = entry$chart_type,
     template_path     = tpl_path,
     slide_title       = tc_or(entry$slide_title, ""),
@@ -579,6 +603,7 @@ export_history_regenerate_excel_one <- function(entry, session, templates_dir = 
       tc_data           = live_spec$tc_data,
       chart_type        = live_spec$chart_type,
       slide_matrix      = live_spec$slide_matrix,
+      raw_data          = live_spec$raw_data,
       slide_title       = live_spec$slide_title,
       figure_title      = live_spec$figure_title,
       template_override = live_spec$template_override,

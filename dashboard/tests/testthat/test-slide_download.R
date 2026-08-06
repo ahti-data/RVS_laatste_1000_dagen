@@ -241,6 +241,31 @@ test_that("no-template chart still yields a ZIP with table + explanation", {
   expect_false(any(grepl("slide", files)))
 })
 
+test_that("tc_build_slide_zip includes a companion _raw.xlsx when raw_data is supplied", {
+  raw_df <- data.frame(category = c("a", "b"), value = c(1, 2), stringsAsFactors = FALSE)
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "waterfall", raw_data = raw_df,
+    filename_prefix = "bfly", templates_dir = templates_dir,
+    write_table_fun = stub_writer
+  )
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("bfly_table.xlsx" %in% files)
+  expect_true("bfly_raw.xlsx" %in% files)
+})
+
+test_that("tc_build_slide_zip omits _raw.xlsx when raw_data is NULL", {
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "waterfall",
+    filename_prefix = "bfly", templates_dir = templates_dir,
+    write_table_fun = stub_writer
+  )
+  files <- utils::unzip(z, list = TRUE)$Name
+  expect_true("bfly_table.xlsx" %in% files)
+  expect_false("bfly_raw.xlsx" %in% files)
+})
+
 test_that("tc_build_slide_zip embeds charts_overview.html when asset_path exists", {
   png_path <- tempfile(fileext = ".png")
   writeBin(as.raw(c(1, 2, 3)), png_path)

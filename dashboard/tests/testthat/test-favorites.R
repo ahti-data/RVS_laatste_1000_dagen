@@ -603,6 +603,9 @@ test_that("downloading a favorites deck auto-logs each renderable favorite to Ex
     expect_length(history, 1)
     expect_equal(history[[1]]$subtab_label, "Revenue")
     expect_equal(history[[1]]$chart_type, "stacked_bar")
+    # So a later redownload of this entry can also ship a companion
+    # _raw.xlsx (see export_history_redownload()), not just the think-cell one.
+    expect_false(is.null(history[[1]]$raw_data_table))
 
     extract_dir <- tempfile("extract_")
     utils::unzip(z, exdir = extract_dir)
