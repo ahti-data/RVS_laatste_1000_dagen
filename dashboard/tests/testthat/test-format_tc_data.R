@@ -267,3 +267,33 @@ test_that("sanitize_excel_sheet_names de-duplicates sheet names that collide aft
   expect_equal(length(unique(result)), 3)
   expect_true(all(nchar(result) <= 31))
 })
+
+test_that("sanitize_filename_component strips every character Windows forbids in a file name", {
+  # '|' is legal in an Excel sheet name but not in a Windows file name -- the
+  # bug this sanitizer exists to fix (chart titles routinely join parts with
+  # " | ", e.g. "sheet | outcome | maat", and sanitize_excel_sheet_name() lets
+  # it straight through into a real file path).
+  expect_equal(sanitize_filename_component("MSZ activiteit | Aantal"), "MSZ activiteit _ Aantal")
+  expect_equal(sanitize_filename_component("a<b"), "a_b")
+  expect_equal(sanitize_filename_component("a>b"), "a_b")
+  expect_equal(sanitize_filename_component('a"b'), "a_b")
+  expect_equal(sanitize_filename_component("a/b"), "a_b")
+  expect_equal(sanitize_filename_component("a\\b"), "a_b")
+  expect_equal(sanitize_filename_component("a:b"), "a_b")
+  expect_equal(sanitize_filename_component("a?b"), "a_b")
+  expect_equal(sanitize_filename_component("a*b"), "a_b")
+  expect_equal(sanitize_filename_component("Plain Title"), "Plain Title")
+})
+
+test_that("sanitize_filename_component collapses repeated separators and never returns an empty name", {
+  expect_equal(sanitize_filename_component("a|||b"), "a_b")
+  expect_equal(sanitize_filename_component(":::"), "chart")
+  expect_equal(sanitize_filename_component(""), "chart")
+  expect_true(nchar(sanitize_filename_component(strrep("x", 200))) <= 80)
+})
+
+test_that("sanitize_filename_components de-duplicates names that collide after sanitizing", {
+  result <- sanitize_filename_components(c("A | B", "A _ B", "Other"))
+  expect_equal(result[[3]], "Other")
+  expect_equal(length(unique(result)), 3)
+})

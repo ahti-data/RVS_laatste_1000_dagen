@@ -1053,26 +1053,11 @@ tc_build_slide_zip <- function(zip_path,
             length(tc_data), names(tc_data)[[1]])
   } else NULL
 
-  # ---- (2) underlying table (identical to the think-cell table download,
-  # but with its own category axis reordered to match the slide's -- see
-  # tc_reorder_by_categories() -- so a PM opening this workbook alongside the
-  # rendered slide sees the same order, not just the .pptx chart itself) ----
-  table_path <- file.path(work, paste0(filename_prefix, "_table.xlsx"))
-  write_table_fun(tc_reorder_by_categories(tc_data, names(slide_matrix)[-1]), table_path)
-
-  # ---- (2b) raw data (the exact data behind the plot, before think-cell
-  # reshaping -- same as the chart's own "Download data (raw)" button) ----
-  # optional: an older history entry replayed via export_history_redownload()
-  # may not have one captured.
-  if (!is.null(raw_data)) {
-    raw_path <- file.path(work, paste0(filename_prefix, "_raw.xlsx"))
-    write_table_fun(raw_data, raw_path)
-  }
-
-  rendered <- FALSE
-
   # The one provenance record this export carries -- see
-  # tc_build_ppttc_slide_block() for where it's written (there is no log.txt).
+  # tc_build_ppttc_slide_block() for where it's written into the slide's own
+  # datasheet (there is no log.txt). Computed before (2) below so the loose
+  # _table.xlsx companion can carry the same corner-cell stamp, not just the
+  # rendered slide.
   datasheet_log <- tc_build_datasheet_log(
     dashboard_title = dashboard_title,
     tab_label       = tab_label,
@@ -1085,6 +1070,28 @@ tc_build_slide_zip <- function(zip_path,
     source_sheet    = source_sheet,
     source_mtime    = source_mtime
   )
+
+  # ---- (2) underlying table (identical to the think-cell table download,
+  # but with its own category axis reordered to match the slide's -- see
+  # tc_reorder_by_categories() -- so a PM opening this workbook alongside the
+  # rendered slide sees the same order, not just the .pptx chart itself) ----
+  table_path <- file.path(work, paste0(filename_prefix, "_table.xlsx"))
+  write_table_fun(
+    tc_stamp_tc_matrix_corner(tc_reorder_by_categories(tc_data, names(slide_matrix)[-1]), datasheet_log),
+    table_path
+  )
+
+  # ---- (2b) raw data (the exact data behind the plot, before think-cell
+  # reshaping -- same as the chart's own "Download data (raw)" button) ----
+  # optional: an older history entry replayed via export_history_redownload()
+  # may not have one captured. Not stamped: raw_data's column 1 is a real
+  # data column, not the blank placeholder think-cell leaves.
+  if (!is.null(raw_data)) {
+    raw_path <- file.path(work, paste0(filename_prefix, "_raw.xlsx"))
+    write_table_fun(raw_data, raw_path)
+  }
+
+  rendered <- FALSE
 
   if (!has_template) {
     # No suitable template: still give the user the data + a clear explanation.

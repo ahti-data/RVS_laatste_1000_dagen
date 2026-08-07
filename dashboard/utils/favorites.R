@@ -285,7 +285,15 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
       vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
     )
 
-    sheets <- stats::setNames(lapply(specs, function(s) as_df(s$tc_table)), labels)
+    # Stamp each sheet with its own chart's provenance log (see
+    # tc_stamp_tc_matrix_corner()) -- same corner-cell record the single-chart
+    # "Download Excel data (think-cell)" button and the slide's own datasheet
+    # already carry, so a PM who only has this combined workbook can still
+    # trace any sheet back to its source.
+    sheets <- stats::setNames(
+      lapply(specs, function(s) tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)),
+      labels
+    )
     write_tc_xlsx(sheets, file.path(work, "favorites_thinkcell_tables.xlsx"))
 
     # raw_table is optional per spec; specs without one simply don't
@@ -335,12 +343,21 @@ tc_write_deck_files <- function(specs, work, ppttc_exe = NULL, include_tables = 
   as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
 
   if (include_tables) {
-    file_labels <- sanitize_excel_sheet_names(
+    # A real file name, not an Excel sheet name -- sanitize_excel_sheet_names()
+    # doesn't strip '|', which several chart titles use as a separator (e.g.
+    # agg_plot_title's "sheet | outcome | maat") and which Windows forbids in
+    # file names, crashing the whole ZIP when it reached here unsanitized.
+    file_labels <- sanitize_filename_components(
       vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
     )
     for (i in seq_along(specs)) {
       s <- specs[[i]]
-      write_tc_xlsx(as_df(s$tc_table), file.path(work, paste0(file_labels[[i]], "_table.xlsx")))
+      # Same corner-cell provenance stamp the single-chart "Download Excel
+      # data (think-cell)" button carries (see tc_stamp_tc_matrix_corner()) --
+      # only the think-cell-shaped table gets it; raw_table's column 1 is a
+      # real data column, not the blank placeholder think-cell leaves.
+      stamped <- tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)
+      write_tc_xlsx(stamped, file.path(work, paste0(file_labels[[i]], "_table.xlsx")))
       if (!is.null(s$raw_table)) {
         write_tc_xlsx(as_df(s$raw_table), file.path(work, paste0(file_labels[[i]], "_raw.xlsx")))
       }

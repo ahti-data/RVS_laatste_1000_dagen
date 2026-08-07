@@ -3211,6 +3211,12 @@ server <- function(input, output, session) {
     if (nrow(df) == 0) return(df)
 
     split_var <- input$it3_cost_split_var %||% "none"
+    sheet <- input$it3_cost_dataset
+    if ("name" %in% names(df)) {
+      df$outcome_label <- pretty_metric_name(df$name, sheet)
+    } else {
+      df$outcome_label <- "Uitkomst"
+    }
     if ("died" %in% names(df)) {
       df$died_label <- population_label(df$died)
     } else {
@@ -3233,21 +3239,40 @@ server <- function(input, output, session) {
           series = if (multiple_outcomes) combine_series(died_label, name) else as.character(died_label),
           export_value = metric_value
         ) |>
-        dplyr::mutate(category = as.character(category))
+        dplyr::arrange(category)
     } else if (use_split_bar) {
+      # Mirror output$it3_plot_cost_agg's use_split_bar branch exactly (same
+      # levels_order/stats::reorder() fallback) so the exported row order
+      # matches the chart's bar order instead of falling back to whatever
+      # order it3_cost_agg_filtered() happened to return.
+      split_value <- as.character(df[[split_var]])
+      levels_order <- pretty_value(split_var, ordered_split_values(split_var, split_value))
       df |>
         dplyr::mutate(
-          category = as.character(pretty_value(split_var, .data[[split_var]])),
+          category = pretty_value(split_var, split_value),
+          category = if (length(levels_order) > 0) {
+            factor(category, levels = levels_order)
+          } else {
+            stats::reorder(category, metric_value)
+          },
           series = as.character(died_label),
           export_value = metric_value
-        )
+        ) |>
+        dplyr::arrange(category)
     } else {
+      # Mirror the line-chart branch's dplyr::arrange(outcome_label,
+      # split_value, t_num) so exported rows follow the same left-to-right
+      # order plotly draws the line in.
       df |>
         dplyr::mutate(
           category = as.character(numericize(t)),
           series = combine_series(pretty_value(split_var, .data[[split_var]]), died_label),
-          export_value = metric_value
-        )
+          export_value = metric_value,
+          .t_num = numericize(t),
+          .split_value = as.character(.data[[split_var]])
+        ) |>
+        dplyr::arrange(outcome_label, .split_value, .t_num) |>
+        dplyr::select(-.t_num, -.split_value)
     }
   })
 
@@ -3482,18 +3507,30 @@ server <- function(input, output, session) {
       req("sum_totaal_groep" %in% names(df), "n_totaal_population" %in% names(df))
     }
 
-    df |>
+    df <- df |>
       dplyr::mutate(
+        t_num = numericize(t),
         t_label = as.character(t),
         zpk_category = as.character(zpk_category),
         metric_value = it3_zpk_metric_values(df, metric)
       ) |>
-      dplyr::filter(!is.na(metric_value)) |>
+      dplyr::filter(!is.na(metric_value))
+
+    # Mirror output$it3_plot_zpk's t_num-based ordering (factor(t_label,
+    # levels = t_levels)) so the exported row order matches the chart's
+    # left-to-right t order instead of it3_zpk_filtered()'s natural order.
+    t_levels <- df |>
+      dplyr::distinct(t_label, t_num) |>
+      dplyr::arrange(t_num) |>
+      dplyr::pull(t_label)
+
+    df |>
       dplyr::transmute(
-        category = t_label,
+        category = factor(t_label, levels = t_levels),
         series = zpk_category,
         metric_value = metric_value
-      )
+      ) |>
+      dplyr::arrange(category)
   })
 
   chart_data_downloads_server(
@@ -4280,7 +4317,12 @@ server <- function(input, output, session) {
   it3_regression_export_data <- reactive({
     df <- it3_regression_filtered()
     if (nrow(df) == 0) return(df)
+    # output$it3_plot_regression arranges by coefficient (ascending) then
+    # reverses the coef_label factor purely so plotly's bottom-to-top y-axis
+    # convention reads top-to-bottom as ascending -- the plain ascending
+    # arrange() below already reproduces that same top-to-bottom order here.
     df |>
+      dplyr::arrange(coefficient) |>
       dplyr::transmute(
         category = as.character(coefficient),
         series = "Coëfficiënt",
@@ -4826,20 +4868,27 @@ server <- function(input, output, session) {
       df <- data_maandelijks()
       if (nrow(df) == 0) return(df)
       selected_domains <- input$mnd_domein
+      # output$plot_zorg_maandelijks's bar branches order the x-axis
+      # ascending via factor(t_numeric, levels = sort(unique(t_numeric))),
+      # but data_maandelijks() itself is sorted descending -- mirror the
+      # plot's ascending order here so the export doesn't come out reversed.
+      t_levels <- sort(unique(df$t_numeric))
       if (length(selected_domains) > 1) {
         df |>
           dplyr::transmute(
-            category = as.character(t_numeric),
+            category = factor(t_numeric, levels = t_levels),
             series = as.character(selected_domein),
             export_value = value
-          )
+          ) |>
+          dplyr::arrange(category)
       } else {
         df |>
           dplyr::transmute(
-            category = as.character(t_numeric),
+            category = factor(t_numeric, levels = t_levels),
             series = as.character(died),
             export_value = value
-          )
+          ) |>
+          dplyr::arrange(category)
       }
     }
   })
@@ -5282,7 +5331,13 @@ server <- function(input, output, session) {
     } else {
       df <- df |> dplyr::mutate(series = as.character(died))
     }
-    df
+    # output$plot_interventies plots x = name with no explicit reorder(), so
+    # ggplot's discrete-axis default (alphabetical) is what's shown -- make
+    # that explicit here so the export matches instead of keeping whatever
+    # row order data_interventies() happened to produce.
+    df |>
+      dplyr::mutate(name = factor(name, levels = sort(unique(name)))) |>
+      dplyr::arrange(name)
   })
 
   chart_data_downloads_server(
@@ -5981,38 +6036,82 @@ server <- function(input, output, session) {
       )
     req(nrow(df_plot) > 0)
 
+    multiple_outcomes <- dplyr::n_distinct(df_plot$name) > 1
+    multiple_versions <- dplyr::n_distinct(df_plot$versie) > 1
+
     if (identical(view, "maandelijks") && "t" %in% names(df_plot)) {
+      # Mirror agg_plot_obj()'s "maandelijks" branch (arrange(line_group,
+      # x_value)) so each line's points come out chronologically, and keep
+      # category as an ordered factor (not as.character()) so
+      # prepare_tc_long_data() inherits this order for the "auto" think-cell
+      # export too, not just the raw one.
+      t_levels <- df_plot |>
+        dplyr::distinct(t_num = numericize(t)) |>
+        dplyr::arrange(t_num) |>
+        dplyr::pull(t_num)
       df_plot |>
         dplyr::mutate(
           line_base = dplyr::case_when(
-            has_split && dplyr::n_distinct(name) > 1 ~ paste(outcome_label, split_label, population_value, sep = " | "),
+            has_split && multiple_outcomes ~ paste(outcome_label, split_label, population_value, sep = " | "),
             has_split ~ split_label,
-            dplyr::n_distinct(name) > 1 ~ paste(outcome_label, population_value, sep = " | "),
+            multiple_outcomes ~ paste(outcome_label, population_value, sep = " | "),
             TRUE ~ population_value
           ),
           versie_label = dplyr::recode(versie, Geobserveerd = "Niet gecorrigeerd", Inflatiecorrectie = "Inflatiecorrectie", .default = versie),
-          series = if (dplyr::n_distinct(versie) > 1) paste(line_base, versie_label, sep = ", ") else line_base
+          series = if (multiple_versions) paste(line_base, versie_label, sep = ", ") else line_base,
+          category = factor(numericize(t), levels = t_levels)
         ) |>
+        dplyr::arrange(series, category) |>
         dplyr::transmute(
-          category = as.character(numericize(t)),
+          category = category,
           series = as.character(series),
           export_value = value_num
         )
     } else if (has_split) {
+      # Mirror the has_split bar branch's levels_order/stats::reorder()
+      # fallback exactly (same as agg_plot_obj()'s has_split branch).
+      levels_order <- pretty_value(split_col, ordered_split_values(split_col, df_plot$split_value))
       df_plot |>
         dplyr::group_by(name, outcome_label, split_value, split_label, population_value, versie) |>
         dplyr::summarise(export_value = sum(value_num, na.rm = TRUE), .groups = "drop") |>
+        dplyr::mutate(
+          category = if (length(levels_order) > 0) {
+            factor(split_label, levels = levels_order)
+          } else {
+            stats::reorder(split_label, export_value)
+          }
+        ) |>
+        dplyr::arrange(category) |>
         dplyr::transmute(
-          category = as.character(split_label),
+          category = category,
           series = combine_series(population_value, versie),
           export_value = export_value
         )
     } else {
+      # Mirror the plain-bar else branch's x_value construction and its
+      # group_by/summarise aggregation -- the previous row-level transmute
+      # (no aggregation) could produce duplicate category/series pairs that
+      # prepare_tc_long_data() (agg_fun = NULL here) rejects outright, on top
+      # of not matching the chart's bar order.
       df_plot |>
+        dplyr::mutate(
+          x_value = dplyr::case_when(
+            multiple_outcomes && multiple_versions && "died" %in% names(df_plot) ~ paste(outcome_label, population_value, sep = "\n"),
+            multiple_outcomes ~ outcome_label,
+            multiple_versions && "died" %in% names(df_plot) ~ population_value,
+            multiple_versions ~ versie,
+            "died" %in% names(df_plot) ~ population_value,
+            "cohort" %in% names(df_plot) ~ cohort_value,
+            TRUE ~ "Totaal"
+          )
+        ) |>
+        dplyr::group_by(x_value, population_value, versie, cohort_value) |>
+        dplyr::summarise(export_value = sum(value_num, na.rm = TRUE), .groups = "drop") |>
+        dplyr::mutate(category = factor(x_value, levels = unique(x_value))) |>
         dplyr::transmute(
-          category = as.character(outcome_label),
+          category = category,
           series = combine_series(population_value, versie, cohort_value),
-          export_value = value_num
+          export_value = export_value
         )
     }
   })
