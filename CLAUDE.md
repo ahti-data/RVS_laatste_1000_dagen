@@ -29,11 +29,16 @@ work done.
 - `dashboard/state/` — runtime state, never committed or synced by the deploy:
   - `dictionary.json` — the shared raw-name -> pretty-label lookup for chart bar/category labels
     (see `dashboard/utils/dictionary.R`), edited from the **Dictionary** tab
-    (`dashboard/utils/dictionary_admin.R`). Prefilled on first use from
-    `dashboard/data/metadata/dictionary_seed.R`'s `dictionary_seed_entries()` override -- rows
-    mechanically derived from this app's own `pretty_*_default()` recode tables (see Conventions
-    below), not hand-typed. A user edit always wins over the seed, since edits upsert into the
-    same file the seed was written into.
+    (`dashboard/utils/dictionary_admin.R`). Prefilled on first use from `app.R`'s own
+    `dictionary_seed_entries()` override (defined directly in `app.R`, near the bottom of its
+    `pretty_*_default()` block, using `<<-` -- see the comment on that function for why both of
+    those choices matter: Shiny sources `app.R` into its own isolated environment, not the global
+    one that `utils/dictionary.R` lives in via `source_util()`, so this override has to be defined
+    where its dependencies (the `pretty_*_default()` tables) actually live, and assigned with
+    `<<-` so `dictionary_list()` -- itself living in that other environment -- actually sees it).
+    Rows are mechanically derived from this app's own `pretty_*_default()` recode tables (see
+    Conventions below), not hand-typed. A user edit always wins over the seed, since edits upsert
+    into the same file the seed was written into.
   - `favorites.json` (shared favorites) and `favorite_assets/` (client-captured PNG snapshots of
     starred charts, see `TC_FAVORITE_CAPTURE_JS` in `utils/chart_downloads.R`).
   - `export_history/<id>.json` — one file per "Download slide" click, logged automatically (see

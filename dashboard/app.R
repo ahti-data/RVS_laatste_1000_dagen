@@ -112,10 +112,6 @@ source_util("utils/dictionary.R")
 source_util("utils/dictionary_admin.R")
 source_util("utils/tab_theme.R")
 source_util("data/metadata/brand_colors.R")
-# Must load after utils/dictionary.R so its dictionary_seed_entries()
-# override (real raw->pretty rows, mined from this file's own pretty_*()
-# tables below) replaces the template's empty default.
-source_util("data/metadata/dictionary_seed.R")
 
 demographic_cols_iteration2 <- c(
   "doodsoorzaak",
@@ -737,6 +733,100 @@ intervention_names <- c(
   "kosten_aaa_totaal", "kosten_heup_operatie", "kosten_heup_prothese",
   "kosten_heup_totaal"
 )
+
+#' Dictionary prefill for this dashboard (see `utils/dictionary.R`).
+#'
+#' Overrides `utils/dictionary.R`'s empty default with real rows, mechanically
+#' derived from the `pretty_*_default()` recode tables and raw-name vectors
+#' above (`pretty_sheet_default()`, `pretty_stat_default()`,
+#' `pretty_code_metric_default()`, `pretty_vektmszsettingzpk_default()`,
+#' `pretty_it3_zpk_metric_default()`, `pretty_split_name_default()`,
+#' `pretty_value_default()`, `population_label_default()`,
+#' `pretty_metric_name_default()` applied to `domain_order_zvw`/
+#' `diag_activity_names`/`intervention_names`) -- rather than hand-retyping
+#' the Dutch labels, which risks a transcription typo diverging from the
+#' logic that already produces them.
+#'
+#' Deliberately defined here, directly in `app.R` (not in `utils/` or a
+#' separately `source()`d file), and deliberately assigned with `<<-` (not
+#' `<-`): Shiny's `runApp()` sources `app.R` itself into its own isolated
+#' environment (not the global environment), while `source_util()` (used for
+#' every `utils/*.R` file, including `utils/dictionary.R`) explicitly sources
+#' into the global environment via `local = FALSE`. Two consequences follow.
+#' First, a `dictionary_seed_entries()` defined via `source_util()` could not
+#' see the `pretty_*_default()` functions/vectors above (they live in app.R's
+#' own local environment) -- it looked them up in the wrong environment and
+#' crashed the app on first load with no `state/dictionary.json` on disk yet
+#' (i.e. every fresh deploy). Defining it here, alongside its dependencies,
+#' fixes that. Second, and easy to miss: `dictionary_list()` (in
+#' `utils/dictionary.R`) resolves the *name* `dictionary_seed_entries` via
+#' its own lexical scope -- the global environment -- not wherever it happens
+#' to be called from. A plain `<-` here would only create a new binding
+#' local to app.R's own environment, shadowing the global one *within this
+#' file* but invisible to `dictionary_list()`, which would silently keep
+#' calling `utils/dictionary.R`'s empty default instead (no crash, just a
+#' permanently-empty Dictionary tab). `<<-` walks up to the existing global
+#' binding and overwrites it in place, which is what actually makes this
+#' override take effect. Seeded once into `state/dictionary.json` on first
+#' use; after that, edits made from the Dictionary tab are the source of
+#' truth (see `dictionary_list()`).
+#'
+#' Not exhaustive -- names that only exist inside a workbook at runtime
+#' (per-sheet `name`/`cost_type` values, "top 20 codes" procedure lists)
+#' aren't enumerable here. Anything not seeded falls back to the matching
+#' `pretty_*_default()` function until someone adds it from the Dictionary tab.
+dictionary_seed_entries <<- function() {
+  entries <- list()
+  add <- function(raw_key, scope, pretty_label) {
+    entries[[length(entries) + 1]] <<- list(raw_key = raw_key, scope = scope, pretty_label = pretty_label)
+  }
+  add_from <- function(raw_keys, scope, prettify) {
+    for (k in raw_keys) add(k, scope, prettify(k))
+  }
+
+  sheet_keys <- c(
+    "top_20_codes_operatie_1000", "top_20_codes_operatie_30",
+    "top_20_codes_activit_1000", "top_20_codes_activit_30",
+    "wlz", "wlz_corrected", "zvw", "zvw_corrected",
+    "msz_prestaties", "msz_prestaties_corrected", "msz_prestaties_diag",
+    "msz_activit_diag", "msz_addon_oncology_total_cancer",
+    "msz_addon_oncology_cancer", "msz_addon_oncology_total", "msz_addon",
+    "huisartsdecltab", "msz_prestatie_diagnostiek"
+  )
+  add_from(sheet_keys, "sheet", pretty_sheet_default)
+
+  add_from(names(stat_labels_iteration2), "stat", pretty_stat_default)
+
+  code_metric_keys <- c(
+    "n_totaal_gebruikers", "n_totaal_declaraties", "gebruikers_per_persoon",
+    "declaraties_per_persoon", "sum_totaal_groep", "sum_per_gebruiker"
+  )
+  add_from(code_metric_keys, "code_metric", pretty_code_metric_default)
+
+  add_from(c("1", "2", "3", "9"), "vektmszsettingzpk", pretty_vektmszsettingzpk_default)
+
+  it3_zpk_metric_keys <- c(
+    "n_totaal_gebruikers", "n_totaal_declaraties", "sum_totaal_groep",
+    "median_cost_per_declaratie", "gemiddelde_kosten_per_persoon"
+  )
+  add_from(it3_zpk_metric_keys, "it3_zpk_metric", pretty_it3_zpk_metric_default)
+
+  add_from(demographic_cols_iteration2, "split_name", pretty_split_name_default)
+  add_from(c("provincie", "burgstaat", "used_any_acp_2years"), "split_name", pretty_split_name_default)
+
+  add_from(as.character(2:9), "age_cat", function(k) pretty_value_default("age_cat", k))
+  add_from(c("400+", "280_400", "120_280", "tot_120", "Overig"), "inkomen_klasse",
+           function(k) pretty_value_default("inkomen_klasse", k))
+
+  add_from(c("Overleden", "In leven"), "population", population_label_default)
+
+  add_from(domain_order_zvw, "zvw_metric", function(k) pretty_metric_name_default(k, sheet = "zvw"))
+
+  add_from(c(diag_activity_names, intervention_names), "metric_generic",
+           function(k) pretty_metric_name_default(k, sheet = NULL))
+
+  entries
+}
 
 is_cost_outcome <- function(name) {
   stringr::str_detect(
