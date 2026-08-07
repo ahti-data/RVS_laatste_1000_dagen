@@ -251,6 +251,49 @@ sanitize_excel_sheet_names <- function(names) {
   }, character(1))
 }
 
+#' Sanitize a label for use as a filesystem file name component -- not an
+#' Excel sheet name. [sanitize_excel_sheet_name()] only strips Excel's own
+#' forbidden characters (`\ / ? * : [ ]`); a real Windows file name forbids a
+#' different, wider set (`< > : " / \ | ? *`) plus control characters, and has
+#' no 31-char limit. Reusing the Excel sanitizer for an actual file path lets
+#' `|` straight through -- and this app's chart titles routinely join parts
+#' with `" | "` (e.g. `paste(a, b, sep = " | ")`) -- which then fails
+#' outright when the xlsx writer tries to create the file on Windows.
+#' @param name Character label.
+#' @return A filesystem-safe string, truncated to 80 chars, never empty.
+sanitize_filename_component <- function(name) {
+  name <- as.character(name)
+  name <- gsub('[<>:"/\\|?*[:cntrl:]]', "_", name)
+  name <- gsub("_+", "_", name)
+  name <- trimws(gsub("^_+|_+$", "", name))
+  name <- substr(name, 1, 80)
+  if (!nzchar(name)) "chart" else name
+}
+
+#' Vectorized [sanitize_filename_component()] with the same duplicate-suffix
+#' handling as [sanitize_excel_sheet_names()], so two specs whose labels
+#' collide after sanitizing don't overwrite each other's files in a ZIP.
+#' @param names Character vector of labels.
+#' @return Character vector of unique, filesystem-safe names.
+sanitize_filename_components <- function(names) {
+  sanitized <- vapply(names, sanitize_filename_component, character(1))
+
+  if (!any(duplicated(sanitized))) {
+    return(unname(sanitized))
+  }
+
+  seen <- character(0)
+  vapply(seq_along(sanitized), function(i) {
+    name <- sanitized[[i]]
+    count <- sum(seen == name) + 1L
+    seen <<- c(seen, name)
+    if (count == 1L) {
+      return(name)
+    }
+    paste0(name, "_", count)
+  }, character(1))
+}
+
 prepare_tc_long_data <- function(
     df,
     category_col,

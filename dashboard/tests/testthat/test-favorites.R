@@ -464,6 +464,66 @@ test_that("favorites_build_slides_zip includes the deck plus each chart's own ta
   })
 })
 
+test_that("deck ZIP's combined favorites_thinkcell_tables.xlsx carries each sheet's own provenance log in its corner cell", {
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    session <- fake_session()
+    register_live_chart(session, "revenue_dl")
+    entries <- list(list(label = "Revenue", module_id = "revenue_dl"))
+
+    z <- tempfile(fileext = ".zip")
+    favorites_build_deck_zip(z, entries = entries, session = session, ppttc_exe = NA, templates_dir = templates_dir)
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    header <- names(readxl::read_excel(
+      file.path(extract_dir, "favorites_thinkcell_tables.xlsx"), sheet = "Revenue", n_max = 0
+    ))
+    expect_true(grepl("^LOG \\|", header[[1]]))
+  })
+})
+
+test_that("favorites_build_slides_zip's per-chart _table.xlsx carries the same provenance log the single-chart download does", {
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    session <- fake_session()
+    register_live_chart(session, "revenue_dl")
+    entries <- list(list(label = "Revenue", module_id = "revenue_dl"))
+
+    z <- tempfile(fileext = ".zip")
+    favorites_build_slides_zip(z, entries = entries, session = session, ppttc_exe = NA, templates_dir = templates_dir)
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    header <- names(readxl::read_excel(
+      file.path(extract_dir, "Revenue_table.xlsx"), n_max = 0
+    ))
+    expect_true(grepl("^LOG \\|", header[[1]]))
+  })
+})
+
+test_that("favorites_build_slides_zip sanitizes '|' (and other filesystem-illegal chars) out of per-chart file names", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    session <- fake_session()
+    register_live_chart(session, "revenue_dl")
+    # Several chart titles in real dashboards join parts with " | " (e.g.
+    # "sheet | outcome | maat") -- Excel sheet names tolerate '|' but Windows
+    # file names don't, and tc_write_deck_files()'s include_tables branch
+    # writes this label straight into a real file path.
+    entries <- list(list(label = "MSZ activiteit diagnostiek | Aantal gebruikers", module_id = "revenue_dl"))
+
+    z <- tempfile(fileext = ".zip")
+    favorites_build_slides_zip(z, entries = entries, session = session, ppttc_exe = NA, templates_dir = templates_dir)
+    files <- utils::unzip(z, list = TRUE)$Name
+    expect_false(any(grepl("|", files, fixed = TRUE)))
+    expect_true(any(grepl("_table\\.xlsx$", files)))
+    expect_true(any(grepl("_raw\\.xlsx$", files)))
+  })
+})
+
 test_that("favorites_build_slides_zip with no favorites still produces a valid, explanatory ZIP", {
   z <- tempfile(fileext = ".zip")
   favorites_build_slides_zip(z, entries = list(), session = fake_session())

@@ -615,6 +615,22 @@ test_that("tc_build_slide_zip's _table.xlsx category order matches the ordered s
   expect_equal(as.character(table[[1]][-1]), c("zorgdomein_b", "zorgdomein_c", "zorgdomein_a"))
 })
 
+test_that("tc_build_slide_zip's _table.xlsx carries the same corner-cell provenance log the slide's own datasheet does", {
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  z <- tempfile(fileext = ".zip")
+  tc_build_slide_zip(
+    z, sample_matrix(), "waterfall",
+    filename_prefix = "bfly", templates_dir = templates_dir, ppttc_exe = NA,
+    dashboard_title = "D", tab_label = "T", subtab_label = "Sub"
+  )
+  extract_dir <- tempfile("extract_")
+  utils::unzip(z, exdir = extract_dir)
+  header <- names(readxl::read_excel(file.path(extract_dir, "bfly_table.xlsx"), n_max = 0))
+  expect_true(grepl("^LOG \\|", header[[1]]))
+  expect_true(grepl("dashboard=D", header[[1]], fixed = TRUE))
+})
+
 test_that("tc_numeric_or_na handles numeric strings and decimals", {
   expect_equal(tc_numeric_or_na(c("-1", "-10", "-2")), c(-1, -10, -2))
   expect_equal(tc_numeric_or_na(c("1,5", "2,5")), c(1.5, 2.5))
