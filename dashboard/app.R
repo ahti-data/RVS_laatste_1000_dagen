@@ -113,6 +113,29 @@ source_util("utils/dictionary_admin.R")
 source_util("utils/tab_theme.R")
 source_util("data/metadata/brand_colors.R")
 
+# Friendlier category headings for this dashboard's own dictionary scopes
+# (utils/dictionary_admin.R's DICTIONARY_SCOPE_LABELS default only knows
+# about "" / no scope). Assigned with <<-, not <-: utils/dictionary_admin.R
+# is sourced with local = FALSE (source_util()), landing this variable in
+# the global environment, while this app.R code itself runs in Shiny's own
+# private per-app environment under shiny::runApp() -- a plain `<-` here
+# would only create a *new*, local-to-app.R binding, invisible to
+# dictionary_admin_server()'s output$list (which reads the global one) --
+# same class of bug as dictionary_seed_entries() below; see its comment.
+DICTIONARY_SCOPE_LABELS <<- c(DICTIONARY_SCOPE_LABELS, c(
+  sheet             = "Sheets / datasets",
+  stat              = "Statistieken",
+  code_metric       = "Coderingen",
+  vektmszsettingzpk = "Setting (kliniek / poliklinisch)",
+  it3_zpk_metric    = "ZPK-metrics",
+  split_name        = "Demografische splitsingen",
+  age_cat           = "Leeftijdscategorie",
+  inkomen_klasse    = "Inkomensklasse",
+  population        = "Populatie (overleden / in leven)",
+  zvw_metric        = "ZVW zorgvariabelen (per sheet)",
+  metric_generic    = "Zorgvariabelen (algemeen)"
+))
+
 demographic_cols_iteration2 <- c(
   "doodsoorzaak",
   "age_cat",
@@ -824,6 +847,34 @@ dictionary_seed_entries <<- function() {
 
   add_from(c(diag_activity_names, intervention_names), "metric_generic",
            function(k) pretty_metric_name_default(k, sheet = NULL))
+
+  # "Zorg Totaal" tab (iter1_totaal_dl) zorgvariabelen -- unlike
+  # domain_order_zvw above, these raw codes have no reasonable
+  # pretty_metric_name_default() fallback (e.g. "bedragwlzzin" ->
+  # "Bedrag WLZzin"), so curated by hand instead of auto-derived. Best-effort
+  # Dutch translations, not verified domain terminology -- edit freely from
+  # the Dictionary tab. bedragzvwwvp and zvwkwykverpleging are two distinct
+  # raw codes that both relate to wijkverpleging costs (likely a direct
+  # declaration vs. a domain aggregate) -- kept as two distinct labels
+  # rather than guessed identical, so an export never shows two different
+  # bars under one indistinguishable label.
+  zorg_totaal_labels <- c(
+    bedragwlzzin             = "WLZ kosten",
+    bedragzvwwvp             = "ZVW kosten wijkverpleging (declaratie)",
+    nopzvwkhuisartsconsult   = "Niet-ZVW kosten huisartsconsult",
+    nopzvwkhuisartsinschrijf = "Niet-ZVW kosten huisartsinschrijving",
+    nopzvwkhuisartsoverig    = "Niet-ZVW kosten huisarts overig",
+    vektmszvergoedbedragav   = "MSZ vergoedbedrag (AV)",
+    vektmszvergoedbedragzvw  = "MSZ vergoedbedrag (ZVW)",
+    zvwkfarmacie             = "ZVW kosten farmacie",
+    zvwkggzzpmtotaal         = "ZVW kosten GGZ (ZPM totaal)",
+    zvwkhuisarts             = "ZVW kosten huisarts",
+    zvwkhulpmiddel           = "ZVW kosten hulpmiddelen",
+    zvwktotaal               = "ZVW kosten totaal",
+    zvwkwykverpleging        = "ZVW kosten wijkverpleging (totaal)",
+    zvwkziekenhuis           = "ZVW kosten ziekenhuis"
+  )
+  for (k in names(zorg_totaal_labels)) add(k, "metric_generic", zorg_totaal_labels[[k]])
 
   entries
 }
@@ -4550,7 +4601,12 @@ server <- function(input, output, session) {
   output$plot_zorg_totaal <- plotly::renderPlotly({
     df <- data_totaal()
     y_label <- if (input$tot_maatstaf == "prevalentie_per_100") "Prevalentie per 100" else "Waarde"
-    p <- ggplot(df, aes(x = reorder(name, waarde), y = waarde, fill = died)) +
+    # pretty_metric_name(name) (scope "metric_generic", since no sheet= is
+    # known here -- data_totaal()/all_data() merge every source sheet
+    # without retaining which one each row came from) -- brings this tab's
+    # on-screen labels in line with every other tab, instead of showing raw
+    # zorgvariabele codes like "bedragwlzzin" directly.
+    p <- ggplot(df, aes(x = reorder(pretty_metric_name(name), waarde), y = waarde, fill = died)) +
       geom_col(position = position_dodge()) +
       facet_wrap(~cohort) +
       theme_minimal() +
@@ -4603,7 +4659,13 @@ server <- function(input, output, session) {
     agg_fun = NULL,
     figure_title = "Zorg Totaal",
     source_output = "iter1_all_output",
-    source_mtime = function() source_mtime_for("iter1_all_output")
+    source_mtime = function() source_mtime_for("iter1_all_output"),
+    # data_totaal_export()'s "name" values are raw zorgvariabele codes (e.g.
+    # "bedragwlzzin") -- same scope the plot's own pretty_metric_name(name)
+    # call above resolves to (no sheet= known here). "series" (from
+    # died/cohort) is left unscoped -- already human-readable, not a
+    # zorgvariabele.
+    category_scope = "metric_generic"
   )
   
   # ==========================================

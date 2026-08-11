@@ -168,6 +168,18 @@ chart_data_downloads_ui <- function(
     shiny::downloadButton(ns("raw"), raw_label, class = "btn-default")
   )
 
+  # Controls whether this chart's own downloads (raw, think-cell, and slide
+  # table alike) relabel category/series *values* through the shared
+  # Dictionary (utils/dictionary.R) before writing them out -- never the
+  # on-screen chart, which always reflects the dictionary already (see
+  # CLAUDE.md's dictionary_relabel() convention). Checked by default since
+  # dictionary-formatted labels are the normal expectation; unchecking is an
+  # escape hatch back to the underlying raw data-source names, e.g. for
+  # re-joining an export with source data.
+  dictionary_checkbox <- shiny::checkboxInput(
+    ns("dictionary_format"), "Format from dictionary", value = TRUE
+  )
+
   show_thinkcell <- if (shiny::is.reactive(chart_type)) {
     TRUE
   } else {
@@ -257,6 +269,7 @@ chart_data_downloads_ui <- function(
       "border:1px solid #E4E7EE; border-radius:8px; padding:12px 14px 14px;",
       "background:#FAFAFA; margin-bottom:10px;"
     ),
+    dictionary_checkbox,
     do.call(shiny::tagList, buttons),
     slide_extra
   )
@@ -266,6 +279,10 @@ chart_data_downloads_ui <- function(
 #'
 #' @param id Module id.
 #' @param data Reactive returning the exact data frame used to build the ggplot.
+#'   Internally shadowed by a wrapped copy that conditionally applies
+#'   `dictionary_relabel()` to `category_col`/`series_col` (see the
+#'   "Format from dictionary" checkbox below) -- every download this module
+#'   builds reads that wrapped version, never this raw argument directly.
 #' @param chart_type think-cell chart type. The think-cell handler is registered
 #'   only when this type is supported. May be a reactive for dynamic chart types.
 #' @param category_col,series_col,value_col Column names for think-cell export.
@@ -289,6 +306,18 @@ chart_data_downloads_ui <- function(
 #'   string or a reactive/function. Stamped as its own `source_updated=`
 #'   field, distinct from the export's own `timestamp=`. Omit if
 #'   `source_output` isn't set either.
+#' @param category_scope,series_scope Dictionary `scope` (see
+#'   `dictionary_relabel()` in `utils/dictionary.R`) for `category_col`'s and
+#'   `series_col`'s *values* -- normally the same scope this chart's own
+#'   plot rendering already uses for that column. Each may be a plain string
+#'   or a reactive/function (like `slide_title`), for a chart whose scope
+#'   depends on a current selection (e.g. a demographic-split column picked
+#'   via a dropdown). Defaults to `category_col`/`series_col` themselves,
+#'   which is only meaningful when that column name IS the scope (as in a
+#'   single-chart template) -- a dashboard with many charts sharing generic
+#'   column names (e.g. every chart's raw data using "category"/"series")
+#'   should pass the real scope explicitly, or downloads will fall back to
+#'   dictionary_default_prettify() instead of the intended lookup.
 chart_data_downloads_server <- function(
     id,
     data,
@@ -308,7 +337,9 @@ chart_data_downloads_server <- function(
     template_override = NULL,
     source_output = NULL,
     source_sheet = NULL,
-    source_mtime = NULL
+    source_mtime = NULL,
+    category_scope = NULL,
+    series_scope = NULL
 ) {
   shiny::moduleServer(id, function(input, output, session) {
     resolve_opt <- function(x) {
@@ -317,6 +348,83 @@ chart_data_downloads_server <- function(
       if (is.function(x)) return(tc_or(x(), ""))
       x
     }
+
+    # resolve_opt() returns "" for a NULL/unset arg -- fall back to the
+    # column name itself in that case, but re-resolve on every call rather
+    # than once at module setup, since category_scope/series_scope may be a
+    # reactive/function whose value can change (e.g. a chart whose scope
+    # depends on a currently-selected split column).
+    scope_or_col <- function(scope_arg, col) {
+      resolved <- resolve_opt(scope_arg)
+      if (nzchar(resolved)) resolved else col
+    }
+
+    # Every internal use of `data()` below (raw download, think-cell
+    # download, and the slide/favorites spec) goes through this shadowed
+    # reactive instead of the raw `data` argument, so the "Format from
+    # dictionary" checkbox (see chart_data_downloads_ui()) affects every
+    # download this chart offers uniformly, with no per-download-handler
+    # changes needed. Never touches the live chart -- callers render their
+    # own plot from the original `data` reactive (or their own
+    # already-dictionary-formatted variant of it), independent of this one.
+    #
+    # fallback = identity (not dictionary_relabel()'s own default,
+    # dictionary_default_prettify()) deliberately: a value with no matching
+    # dictionary entry is left exactly as given rather than guessed at.
+    # This matters a lot for a chart whose category/series values are
+    # *already* dictionary-formatted upstream (common once several charts
+    # share this module) -- running an already-correct value back through a
+    # generic title-caser on a miss can corrupt it (e.g. "18-29 jaar" ->
+    # "18 29 Jaar"); leaving it untouched makes checking the box a safe
+    # no-op for any chart that hasn't been explicitly wired with a matching
+    # scope, while still fully relabeling a genuinely raw value that does
+    # have an entry.
+    identity_fallback <- function(x) x
+
+    # dictionary_relabel() always returns a plain character vector, even
+    # given a factor -- fine for an unordered column, but silently loses an
+    # *ordered* factor's level order (e.g. a chart built with
+    # `stats::reorder(name, value)` so its export matches the plot's bar
+    # order; format_tc_data()/prepare_tc_long_data() specifically check
+    # `is.factor()` to inherit that order). Relabel the levels themselves
+    # (in their existing order) and rebuild a factor from them, so a
+    # dictionary hit changes the label without silently reordering the bars.
+    relabel_column <- function(x, scope) {
+      relabeled <- dictionary_relabel(x, scope = scope, fallback = identity_fallback)
+      if (is.factor(x)) {
+        relabeled <- factor(relabeled, levels = dictionary_relabel(levels(x), scope = scope, fallback = identity_fallback))
+      }
+      relabeled
+    }
+
+    export_category_order <- category_order
+    export_series_order <- series_order
+    raw_data <- data
+    data <- shiny::reactive({
+      df <- raw_data()
+      if (!isTRUE(input$dictionary_format)) return(df)
+      if (category_col %in% names(df)) {
+        df[[category_col]] <- relabel_column(df[[category_col]], scope_or_col(category_scope, category_col))
+      }
+      if (series_col %in% names(df)) {
+        df[[series_col]] <- relabel_column(df[[series_col]], scope_or_col(series_scope, series_col))
+      }
+      df
+    })
+    # category_order/series_order fix an explicit level order for the raw
+    # values -- once those values are relabeled above, the order vector has
+    # to be relabeled the same way, or format_tc_data()'s factor(levels=...)
+    # silently drops anything that no longer matches.
+    resolved_category_order <- shiny::reactive({
+      if (is.null(export_category_order)) return(NULL)
+      if (!isTRUE(input$dictionary_format)) return(export_category_order)
+      dictionary_relabel(export_category_order, scope = scope_or_col(category_scope, category_col), fallback = identity_fallback)
+    })
+    resolved_series_order <- shiny::reactive({
+      if (is.null(export_series_order)) return(NULL)
+      if (!isTRUE(input$dictionary_format)) return(export_series_order)
+      dictionary_relabel(export_series_order, scope = scope_or_col(series_scope, series_col), fallback = identity_fallback)
+    })
 
     # The template that will be used for the slide: the user's manual choice
     # (picked from the TC_TEMPLATE_MODAL_JS grid, see below) if set, otherwise
@@ -463,8 +571,8 @@ chart_data_downloads_server <- function(
             series_col = series_col,
             value_col = value_col,
             agg_fun = agg_fun,
-            category_order = category_order,
-            series_order = series_order,
+            category_order = resolved_category_order(),
+            series_order = resolved_series_order(),
             waterfall_end_col = waterfall_end_col,
             waterfall_subtotal_cols = waterfall_subtotal_cols,
             facet_col = facet_col
@@ -543,8 +651,8 @@ chart_data_downloads_server <- function(
             series_col = series_col,
             value_col = value_col,
             agg_fun = agg_fun,
-            category_order = category_order,
-            series_order = series_order,
+            category_order = resolved_category_order(),
+            series_order = resolved_series_order(),
             waterfall_end_col = waterfall_end_col,
             waterfall_subtotal_cols = waterfall_subtotal_cols,
             facet_col = facet_col
@@ -580,8 +688,8 @@ chart_data_downloads_server <- function(
               series_col = series_col,
               value_col = value_col,
               agg_fun = agg_fun,
-              category_order = category_order,
-              series_order = series_order
+              category_order = resolved_category_order(),
+              series_order = resolved_series_order()
             ),
             error = function(e) NULL
           )

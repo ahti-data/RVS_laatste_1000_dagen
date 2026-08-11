@@ -12,6 +12,46 @@ dict_entry_ui_id <- function(raw_key, scope) {
   paste0("row_", gsub("[^A-Za-z0-9]", "", raw))
 }
 
+#' Human-readable category headings for the Dictionary tab's entry list,
+#' keyed by an entry's own `scope` -- entries are grouped by `scope` for
+#' display (see `output$list` below), reusing that field rather than adding
+#' a separate one, since it already meaningfully partitions the data. Not
+#' exhaustive on purpose: any scope not listed here still gets a readable
+#' heading via [dictionary_scope_label()]'s fallback, so a dashboard-specific
+#' scope introduced later never renders blank. A dashboard can freely extend
+#' or override this vector (e.g. `DICTIONARY_SCOPE_LABELS["my_scope"] <-
+#' "My category"`, after sourcing this file) to add its own category names.
+DICTIONARY_SCOPE_LABELS <- stats::setNames("Overig (geen scope)", "")
+
+#' Display heading for one scope value -- a curated label from
+#' [DICTIONARY_SCOPE_LABELS] if one exists, else a generic prettified
+#' version of the raw scope string ([dictionary_default_prettify()] in
+#' `utils/dictionary.R`) so every scope present in the data gets *some*
+#' readable heading, curated or not.
+dictionary_scope_label <- function(scope) {
+  scope <- tc_or(scope, "")
+  # match(), not `[[`/`["scope"]` -- both of those treat "" (the "no scope"
+  # case) as "no name" rather than a literal empty-string name to match,
+  # and silently fail to find it (`[[` errors, `[` returns NA) even though
+  # `names(DICTIONARY_SCOPE_LABELS)` genuinely contains "". match() compares
+  # the strings directly and has no such special case.
+  idx <- match(scope, names(DICTIONARY_SCOPE_LABELS))
+  if (!is.na(idx)) return(unname(DICTIONARY_SCOPE_LABELS[idx]))
+  dictionary_default_prettify(scope)
+}
+
+#' Order a set of scope values for display: curated scopes first (in
+#' [DICTIONARY_SCOPE_LABELS]'s own order), anything else alphabetically
+#' after.
+#' @param scopes_present Unique scope values actually present in the data.
+dictionary_scope_order <- function(scopes_present) {
+  known <- names(DICTIONARY_SCOPE_LABELS)
+  c(
+    known[known %in% scopes_present],
+    sort(setdiff(scopes_present, known))
+  )
+}
+
 #' UI for the Dictionary admin panel.
 #' @param id Module id.
 dictionary_admin_ui <- function(id) {
@@ -141,30 +181,49 @@ dictionary_admin_server <- function(id, poll_interval_ms = 2000) {
       shiny::tags$p(class = cls, status_rv$message)
     })
 
+    # Grouped by scope rather than one flat list -- with 100+ entries (a
+    # real dashboard) that's an unscrollable wall; the group heading already
+    # conveys the scope, so individual rows no longer repeat it.
     output$list <- shiny::renderUI({
       entries <- filtered_entries()
       if (length(entries) == 0) {
         return(shiny::tags$p(class = "text-muted", "No dictionary entries yet."))
       }
-      rows <- lapply(entries, function(e) {
-        btn_id <- paste0("edit_", dict_entry_ui_id(e$raw_key, e$scope))
-        shiny::tags$div(
-          style = paste(
-            "display:flex; justify-content:space-between; align-items:center;",
-            "gap:12px; padding:8px 0; border-bottom:1px solid #eee;"
-          ),
+
+      scopes <- vapply(entries, function(e) tc_or(e$scope, ""), character(1))
+      groups <- split(entries, scopes)
+      is_searching <- nzchar(trimws(tc_or(input$search, "")))
+
+      sections <- lapply(dictionary_scope_order(names(groups)), function(sc) {
+        # match() + positional [[, not groups[[sc]] -- same "" pitfall as
+        # dictionary_scope_label() above: `[[` treats an empty-string name
+        # as "no name" and silently returns a length-0 result instead of
+        # the actual "no scope" group.
+        group_entries <- groups[[match(sc, names(groups))]]
+        rows <- lapply(group_entries, function(e) {
+          btn_id <- paste0("edit_", dict_entry_ui_id(e$raw_key, e$scope))
           shiny::tags$div(
-            shiny::tags$code(tc_or(e$raw_key, "")),
-            if (nzchar(tc_or(e$scope, ""))) shiny::tags$span(
-              style = "font-size:11px; color:#9CA3AF; margin-left:6px;",
-              paste0("scope: ", e$scope)
+            style = paste(
+              "display:flex; justify-content:space-between; align-items:center;",
+              "gap:12px; padding:8px 0; border-bottom:1px solid #eee;"
             ),
-            shiny::tags$div(style = "margin-top:2px;", tc_or(e$pretty_label, ""))
+            shiny::tags$div(
+              shiny::tags$code(tc_or(e$raw_key, "")),
+              shiny::tags$div(style = "margin-top:2px;", tc_or(e$pretty_label, ""))
+            ),
+            shiny::actionButton(session$ns(btn_id), "Edit", class = "btn-default btn-sm")
+          )
+        })
+        shiny::tags$details(
+          open = if (is_searching) NA else NULL,
+          shiny::tags$summary(
+            style = "cursor:pointer; font-weight:600; padding:8px 0; list-style:revert;",
+            sprintf("%s (%d)", dictionary_scope_label(sc), length(group_entries))
           ),
-          shiny::actionButton(session$ns(btn_id), "Edit", class = "btn-default btn-sm")
+          shiny::tags$div(style = "padding-left:8px;", do.call(shiny::tagList, rows))
         )
       })
-      do.call(shiny::tagList, rows)
+      do.call(shiny::tagList, sections)
     })
 
     invisible(NULL)
