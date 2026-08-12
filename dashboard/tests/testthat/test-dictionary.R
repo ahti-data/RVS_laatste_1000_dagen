@@ -46,6 +46,67 @@ test_that("dictionary_list seeds from dictionary_seed_entries on first read and 
   })
 })
 
+test_that("dictionary_list fills in a seed entry added after the file already existed", {
+  with_dictionary_path({
+    with_seed_entries(
+      function() list(list(raw_key = "bedragwlzzin", scope = "metric_generic", pretty_label = "WLZ kosten")),
+      {
+        entries <- dictionary_list()
+        expect_length(entries, 1)
+      }
+    )
+    # Simulates a later code change adding a new raw name to
+    # dictionary_seed_entries() -- the file above already exists (created
+    # by the first with_seed_entries() block), so a plain "seed once, at
+    # creation" design would never pick this up.
+    with_seed_entries(
+      function() list(
+        list(raw_key = "bedragwlzzin", scope = "metric_generic", pretty_label = "WLZ kosten"),
+        list(raw_key = "zvwktotaal", scope = "metric_generic", pretty_label = "ZVW kosten totaal")
+      ),
+      {
+        entries <- dictionary_list()
+        expect_length(entries, 2)
+        expect_equal(dictionary_lookup("zvwktotaal", "metric_generic"), "ZVW kosten totaal")
+        # And it's actually persisted, not just returned in-memory.
+        on_disk <- jsonlite::fromJSON(dictionary_path(), simplifyVector = FALSE)
+        expect_length(on_disk, 2)
+      }
+    )
+  })
+})
+
+test_that("dictionary_fill_missing_seed never overwrites a user's existing edit", {
+  with_dictionary_path({
+    dictionary_set_entry("bedragwlzzin", "metric_generic", "WLZ kosten (aangepast door gebruiker)")
+    with_seed_entries(
+      function() list(list(raw_key = "bedragwlzzin", scope = "metric_generic", pretty_label = "WLZ kosten")),
+      {
+        # The seed's own value must NOT clobber the user's edit -- only
+        # entries genuinely missing (by raw_key+scope) get added.
+        expect_equal(dictionary_lookup("bedragwlzzin", "metric_generic"), "WLZ kosten (aangepast door gebruiker)")
+      }
+    )
+  })
+})
+
+test_that("dictionary_set_entry still works correctly once a dictionary.json already exists (no nested-lock hang)", {
+  with_dictionary_path({
+    with_seed_entries(
+      function() list(list(raw_key = "bedragwlzzin", scope = "metric_generic", pretty_label = "WLZ kosten")),
+      {
+        dictionary_list() # materializes the file
+        # dictionary_set_entry() reads with tc_json_list_read(), not
+        # dictionary_list(), specifically so this doesn't try to acquire
+        # the same file lock twice in one call stack.
+        dictionary_set_entry("zvwktotaal", "metric_generic", "ZVW kosten totaal")
+        expect_equal(dictionary_lookup("bedragwlzzin", "metric_generic"), "WLZ kosten")
+        expect_equal(dictionary_lookup("zvwktotaal", "metric_generic"), "ZVW kosten totaal")
+      }
+    )
+  })
+})
+
 test_that("dictionary_set_entry adds a new entry findable by dictionary_lookup", {
   with_dictionary_path({
     dictionary_set_entry("zvwktotaal", "zvw_metric", "Totale ZVW kosten")

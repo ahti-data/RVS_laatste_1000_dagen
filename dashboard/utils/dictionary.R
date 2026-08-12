@@ -58,7 +58,12 @@ dictionary_default_prettify <- function(x) {
 
 #' Read the shared dictionary, seeding it from [dictionary_seed_entries()] on
 #' first use (no file on disk yet) so the file -- and the Dictionary tab --
-#' starts prefilled.
+#' starts prefilled. On every other read, also fills in any seed entries
+#' added *since* the file was first created (see
+#' [dictionary_fill_missing_seed()]) -- without this, a dashboard whose
+#' `state/dictionary.json` already existed before a new raw name was added
+#' to `dictionary_seed_entries()` would never pick that entry up on its own;
+#' someone would have to notice and add it by hand from the Dictionary tab.
 #' @return List of `list(raw_key, scope, pretty_label, updated_at)` entries.
 dictionary_list <- function() {
   path <- dictionary_path()
@@ -67,19 +72,63 @@ dictionary_list <- function() {
     if (length(seed) > 0) dictionary_write(seed)
     return(seed)
   }
-  entries <- tryCatch(
-    jsonlite::fromJSON(path, simplifyVector = FALSE),
-    error = function(e) NULL
-  )
-  if (is.null(entries)) return(list())
-  entries
+  dictionary_fill_missing_seed(tc_json_list_read(path))
+}
+
+#' The exact `(raw_key, scope)` pair [dictionary_lookup()] matches an entry
+#' on, collapsed to one comparable string. The two parts are joined with a
+#' U+0001 control character, not "" -- an empty separator would let
+#' `raw_key="ab", scope="c"` collide with `raw_key="a", scope="bc"`; a
+#' literal control character is effectively never present in real raw
+#' keys/scopes.
+dictionary_entry_key <- function(e) {
+  paste(tc_or(e$raw_key, ""), tc_or(e$scope, ""), sep = "")
+}
+
+#' Add any [dictionary_seed_entries()] rows not yet present in `entries` (by
+#' `(raw_key, scope)`), writing the result back if anything was added.
+#' This is how a *later* addition to `dictionary_seed_entries()` (e.g. a
+#' newly-wired chart's raw codes) still reaches a dashboard whose
+#' `state/dictionary.json` was already created before that addition
+#' existed -- otherwise the file only ever gets seeded once, at creation,
+#' and a real dashboard's growing seed list would silently stop reaching
+#' production after the first deploy.
+#'
+#' Never overwrites or removes an existing entry -- a user's own edit (or
+#' an already-present seed-derived entry) always wins, same principle as
+#' [dictionary_set_entry()]; this only ever *adds* rows for keys that don't
+#' exist at all yet. One consequence worth knowing: deliberately deleting a
+#' seed-provided entry (to fall back to the default formatting instead)
+#' will reappear on a later read, since from this function's point of view
+#' that key is simply "missing" again -- there's no separate "don't re-add
+#' this one" marker. Locks only when there's actually something to add, so
+#' the common case (everything already merged) stays lock-free.
+#' @param entries The dictionary as currently read from disk.
+#' @return `entries`, plus any missing seed rows.
+dictionary_fill_missing_seed <- function(entries) {
+  seed <- dictionary_seed_entries()
+  if (length(seed) == 0) return(entries)
+
+  existing_keys <- vapply(entries, dictionary_entry_key, character(1))
+  missing <- Filter(function(s) !(dictionary_entry_key(s) %in% existing_keys), seed)
+  if (length(missing) == 0) return(entries)
+
+  tc_with_file_lock(dictionary_path(), function() {
+    # Re-read under the lock -- another session may have merged these (or
+    # made other changes) since the unlocked check above.
+    current <- tc_json_list_read(dictionary_path())
+    current_keys <- vapply(current, dictionary_entry_key, character(1))
+    still_missing <- Filter(function(s) !(dictionary_entry_key(s) %in% current_keys), seed)
+    if (length(still_missing) > 0) {
+      current <- c(current, still_missing)
+      dictionary_write(current)
+    }
+    current
+  })
 }
 
 dictionary_write <- function(entries) {
-  path <- dictionary_path()
-  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
-  jsonlite::write_json(entries, path, auto_unbox = TRUE, null = "null", na = "null")
-  invisible(path)
+  tc_json_list_write(entries, dictionary_path())
 }
 
 #' In-process cache of [dictionary_list()], invalidated whenever the
@@ -162,16 +211,21 @@ dictionary_relabel <- function(x, scope = "", fallback = NULL) {
 dictionary_set_entry <- function(raw_key, scope, pretty_label) {
   raw_key <- as.character(raw_key)
   scope <- tc_or(as.character(scope), "")
+  key <- dictionary_entry_key(list(raw_key = raw_key, scope = scope))
   tc_with_file_lock(dictionary_path(), function() {
-    entries <- dictionary_list()
+    # tc_json_list_read(), not dictionary_list() -- the latter's own
+    # missing-seed-entry fill-in (dictionary_fill_missing_seed()) acquires
+    # this exact same lock when it has something to write, and a second
+    # lock request on a path this process already holds a lock on would
+    # hang until dictionary_path()'s tc_with_file_lock() timeout, then
+    # degrade with a warning -- avoid the nested lock entirely instead.
+    entries <- tc_json_list_read(dictionary_path())
     # A plain for-loop rather than Position() -- ggplot2 attaches its own
     # `Position` ggproto object to the search path ahead of base::Position
     # once library(ggplot2) has run, silently shadowing the base function.
     idx <- NULL
     for (i in seq_along(entries)) {
-      e <- entries[[i]]
-      if (identical(as.character(tc_or(e$raw_key, "")), raw_key) &&
-          identical(as.character(tc_or(e$scope, "")), scope)) {
+      if (identical(dictionary_entry_key(entries[[i]]), key)) {
         idx <- i
         break
       }
@@ -188,16 +242,15 @@ dictionary_set_entry <- function(raw_key, scope, pretty_label) {
 }
 
 #' Remove one dictionary entry by `(raw_key, scope)`. See
-#' [dictionary_set_entry()] for why this locks.
+#' [dictionary_set_entry()] for why this locks, and why it reads with
+#' `tc_json_list_read()` rather than `dictionary_list()`.
 dictionary_remove_entry <- function(raw_key, scope) {
   raw_key <- as.character(raw_key)
   scope <- tc_or(as.character(scope), "")
+  key <- dictionary_entry_key(list(raw_key = raw_key, scope = scope))
   tc_with_file_lock(dictionary_path(), function() {
-    entries <- dictionary_list()
-    kept <- Filter(function(e) {
-      !(identical(as.character(tc_or(e$raw_key, "")), raw_key) &&
-          identical(as.character(tc_or(e$scope, "")), scope))
-    }, entries)
+    entries <- tc_json_list_read(dictionary_path())
+    kept <- Filter(function(e) !identical(dictionary_entry_key(e), key), entries)
     dictionary_write(kept)
   })
   invisible(TRUE)

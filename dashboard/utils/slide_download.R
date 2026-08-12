@@ -81,6 +81,31 @@ tc_with_file_lock <- function(path, fn, timeout = 10000) {
   fn()
 }
 
+#' Read a shared "flat JSON array of entries" state file (the shape
+#' `favorites.json`/`dictionary.json` both use), or an empty list if it
+#' doesn't exist yet or fails to parse. Shared by `utils/favorites.R` and
+#' `utils/dictionary.R` so this read behavior only needs to be right once.
+#' @param path Path to the JSON file.
+tc_json_list_read <- function(path) {
+  if (!file.exists(path)) return(list())
+  entries <- tryCatch(
+    jsonlite::fromJSON(path, simplifyVector = FALSE),
+    error = function(e) NULL
+  )
+  if (is.null(entries)) return(list())
+  entries
+}
+
+#' Write a shared "flat JSON array of entries" state file, creating its
+#' directory if needed. Counterpart to [tc_json_list_read()].
+#' @param entries List of entries.
+#' @param path Destination path.
+tc_json_list_write <- function(entries, path) {
+  dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
+  jsonlite::write_json(entries, path, auto_unbox = TRUE, null = "null", na = "null")
+  invisible(path)
+}
+
 #' Format a source data file's last-modified time for the `source_updated=`
 #' field in [tc_build_datasheet_log()] -- same format/timezone as [tc_now()],
 #' so the two are directly comparable on a datasheet's corner cell.
