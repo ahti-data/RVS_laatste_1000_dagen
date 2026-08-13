@@ -443,8 +443,9 @@ test_that("deck ZIP includes a raw-tables workbook alongside the think-cell one"
   })
 })
 
-test_that("favorites_build_slides_zip includes the deck plus each chart's own table/raw xlsx, but no combined workbook", {
+test_that("favorites_build_slides_zip includes the deck plus one combined table/raw workbook, not one loose xlsx per chart", {
   skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
   with_history_dir({
     session <- fake_session()
     register_live_chart(session, "revenue_dl")
@@ -453,11 +454,17 @@ test_that("favorites_build_slides_zip includes the deck plus each chart's own ta
     z <- tempfile(fileext = ".zip")
     favorites_build_slides_zip(z, entries = entries, session = session, ppttc_exe = NA, templates_dir = templates_dir)
     files <- utils::unzip(z, list = TRUE)$Name
-    expect_false("favorites_thinkcell_tables.xlsx" %in% files)
-    expect_false("favorites_raw_tables.xlsx" %in% files)
     expect_true(any(grepl("^favorites_deck", files)))
-    expect_true("Revenue_table.xlsx" %in% files)
-    expect_true("Revenue_raw.xlsx" %in% files)
+    expect_true("favorites_thinkcell_tables.xlsx" %in% files)
+    expect_true("favorites_raw_tables.xlsx" %in% files)
+    expect_false("Revenue_table.xlsx" %in% files)
+    expect_false("Revenue_raw.xlsx" %in% files)
+
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    expect_equal(
+      readxl::excel_sheets(file.path(extract_dir, "favorites_thinkcell_tables.xlsx")), "Revenue"
+    )
 
     # Still logged to Export History, same as favorites_build_deck_zip().
     expect_length(export_history_list(), 1)
@@ -484,7 +491,7 @@ test_that("deck ZIP's combined favorites_thinkcell_tables.xlsx carries each shee
   })
 })
 
-test_that("favorites_build_slides_zip's per-chart _table.xlsx carries the same provenance log the single-chart download does", {
+test_that("favorites_build_slides_zip's combined table workbook carries the same provenance log the single-chart download does", {
   skip_if_not(have_templates, "templates directory not available")
   skip_if_not_installed("readxl")
   with_history_dir({
@@ -498,29 +505,33 @@ test_that("favorites_build_slides_zip's per-chart _table.xlsx carries the same p
     extract_dir <- tempfile("extract_")
     utils::unzip(z, exdir = extract_dir)
     header <- names(readxl::read_excel(
-      file.path(extract_dir, "Revenue_table.xlsx"), n_max = 0
+      file.path(extract_dir, "favorites_thinkcell_tables.xlsx"), sheet = "Revenue", n_max = 0
     ))
     expect_true(grepl("^LOG \\|", header[[1]]))
   })
 })
 
-test_that("favorites_build_slides_zip sanitizes '|' (and other filesystem-illegal chars) out of per-chart file names", {
+test_that("favorites_build_slides_zip's combined workbook survives a '|'-containing chart label", {
   skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
   with_history_dir({
     session <- fake_session()
     register_live_chart(session, "revenue_dl")
     # Several chart titles in real dashboards join parts with " | " (e.g.
-    # "sheet | outcome | maat") -- Excel sheet names tolerate '|' but Windows
-    # file names don't, and tc_write_deck_files()'s include_tables branch
-    # writes this label straight into a real file path.
+    # "sheet | outcome | maat") -- Excel sheet names tolerate '|' (unlike a
+    # real file name, which is why this used to matter for the old
+    # per-chart-file layout); the combined workbook writes it straight
+    # through as a sheet name with no special handling needed.
     entries <- list(list(label = "MSZ activiteit diagnostiek | Aantal gebruikers", module_id = "revenue_dl"))
 
     z <- tempfile(fileext = ".zip")
     favorites_build_slides_zip(z, entries = entries, session = session, ppttc_exe = NA, templates_dir = templates_dir)
-    files <- utils::unzip(z, list = TRUE)$Name
-    expect_false(any(grepl("|", files, fixed = TRUE)))
-    expect_true(any(grepl("_table\\.xlsx$", files)))
-    expect_true(any(grepl("_raw\\.xlsx$", files)))
+    extract_dir <- tempfile("extract_")
+    utils::unzip(z, exdir = extract_dir)
+    expect_equal(
+      readxl::excel_sheets(file.path(extract_dir, "favorites_thinkcell_tables.xlsx")),
+      "MSZ activiteit diagnostiek | Aantal gebruikers"
+    )
   })
 })
 
@@ -739,5 +750,104 @@ test_that("a working ppttc executable renders one combined deck for multiple fav
     files <- utils::unzip(z, list = TRUE)$Name
     expect_true("favorites_deck.pptx" %in% files)
     expect_false(any(grepl("README_render_deck", files)))
+  })
+})
+
+test_that("checking a favorite's row checkbox is reflected in selected_entries()", {
+  with_favorites_path({
+    favorites_add(list(label = "One"))
+    id2 <- favorites_add(list(label = "Two"))
+
+    shiny::testServer(favorites_panel_server, args = list(id = "test_fav"), {
+      # Force the list (and its dynamic per-row checkbox observers,
+      # registered by a separate shiny::observe() block) to materialize
+      # before simulating a click on one of those checkboxes -- same
+      # reasoning as test-dictionary_admin.R's own dynamic-id tests.
+      entries <- entries_reactive()
+      expect_length(entries, 2)
+      session$flushReact()
+
+      expect_length(selected_entries(), 0)
+
+      do.call(session$setInputs, setNames(list(TRUE), paste0("sel_", id2)))
+      selected <- selected_entries()
+      expect_length(selected, 1)
+      expect_equal(selected[[1]]$id, id2)
+    })
+  })
+})
+
+test_that("clear_selection unchecks every selected favorite", {
+  with_favorites_path({
+    id1 <- favorites_add(list(label = "One"))
+    id2 <- favorites_add(list(label = "Two"))
+
+    shiny::testServer(favorites_panel_server, args = list(id = "test_fav"), {
+      entries_reactive()
+      session$flushReact()
+      do.call(session$setInputs, setNames(list(TRUE), paste0("sel_", id1)))
+      do.call(session$setInputs, setNames(list(TRUE), paste0("sel_", id2)))
+      expect_length(selected_entries(), 2)
+
+      session$setInputs(clear_selection = 1)
+      expect_length(selected_entries(), 0)
+    })
+  })
+})
+
+test_that("selected_entries() resolves to only the checked favorites, feeding the selected-only download handlers the right subset", {
+  # download_selected_raw/download_selected_thinkcell (utils/favorites.R)
+  # both just call favorites_build_raw_xlsx()/favorites_build_thinkcell_xlsx()
+  # with entries = selected_entries() -- both build functions' own
+  # entries-filtering is already covered by
+  # "favorites_build_raw_xlsx/thinkcell_xlsx include only live favorites..."
+  # above, so what actually needs covering here is that selected_entries()
+  # itself resolves to the right subset once a checkbox is checked.
+  skip_if_not_installed("readxl")
+  with_favorites_path({
+    favorites_add(list(label = "Revenue", module_id = "revenue_dl"))
+    id2 <- favorites_add(list(label = "Other", module_id = "other_dl"))
+
+    shiny::testServer(favorites_panel_server, args = list(id = "test_fav"), {
+      # Registered against testServer's own internal session (bound to
+      # `session` inside this block), not a separate fake_session() --
+      # favorites_build_raw_xlsx() below is called with that same session,
+      # and tc_chart_registry_get() only finds a chart under the session
+      # that registered it.
+      register_live_chart(session, "revenue_dl")
+      register_live_chart(session, "other_dl")
+
+      entries_reactive()
+      session$flushReact()
+      do.call(session$setInputs, setNames(list(TRUE), paste0("sel_", id2)))
+
+      selected <- selected_entries()
+      expect_length(selected, 1)
+      expect_equal(selected[[1]]$module_id, "other_dl")
+
+      path <- tempfile(fileext = ".xlsx")
+      favorites_build_raw_xlsx(path, entries = selected, session = session)
+      expect_equal(readxl::excel_sheets(path), "Other")
+    })
+  })
+})
+
+test_that("remove_selected_confirm removes only the checked favorites", {
+  with_favorites_path({
+    id1 <- favorites_add(list(label = "One"))
+    id2 <- favorites_add(list(label = "Two"))
+
+    shiny::testServer(favorites_panel_server, args = list(id = "test_fav"), {
+      entries_reactive()
+      session$flushReact()
+      do.call(session$setInputs, setNames(list(TRUE), paste0("sel_", id1)))
+
+      session$setInputs(remove_selected = 1)
+      session$setInputs(remove_selected_confirm = 1)
+
+      remaining <- favorites_list()
+      expect_length(remaining, 1)
+      expect_equal(remaining[[1]]$id, id2)
+    })
   })
 })

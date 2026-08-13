@@ -675,14 +675,15 @@ export_history_regenerate_excel_one <- function(entry, session, templates_dir = 
 
 #' Regenerate just the think-cell Excel table for an arbitrary list of
 #' history entries (the Export History tab's checkbox-driven "Regenerate
-#' Excel only"). One entry writes a bare `.xlsx` straight to `file` (no zip
-#' wrapper needed for a single file); two or more zip one
-#' `<prefix>_thinkcell_<date>.xlsx` per entry. Every entry mints a fresh id
-#' and logs a new history entry, same as the other regenerate actions.
+#' Excel only"). Always writes one bare `.xlsx` straight to `file` -- one
+#' entry's data as the workbook's only sheet, or (for two or more) one sheet
+#' per entry in a single combined workbook -- never a `.zip`, same combined-
+#' workbook shape [tc_build_deck_from_specs()] already uses for a bulk
+#' slide download's own tables (`utils/favorites.R`). Every entry mints a
+#' fresh id and logs a new history entry, same as the other regenerate
+#' actions.
 #' @param entries List of history entries.
-#' @param file Output path (the `file` handed in by downloadHandler) -- a
-#'   bare `.xlsx` for one entry, a `.zip` for two or more; the caller's own
-#'   `filename()` reactive is what actually names it for the browser.
+#' @param file Output `.xlsx` path (the `file` handed in by downloadHandler).
 #' @param session The Shiny session (for the live chart registry lookup).
 #' @return `list(live_count, total)`, invisibly.
 export_history_regenerate_excel_many <- function(entries, file, session, templates_dir = NULL) {
@@ -694,31 +695,11 @@ export_history_regenerate_excel_many <- function(entries, file, session, templat
     return(invisible(list(live_count = live_count, total = 1)))
   }
 
-  work <- tempfile("tc_excel_only_")
-  dir.create(work)
-  old_wd <- getwd()
-  on.exit({
-    setwd(old_wd)
-    unlink(work, recursive = TRUE, force = TRUE)
-  }, add = TRUE)
-
-  used_names <- character(0)
-  for (r in results) {
-    base <- tc_or(r$filename_prefix, "chart")
-    name <- paste0(base, "_thinkcell_", Sys.Date(), ".xlsx")
-    n <- 2
-    while (name %in% used_names) {
-      name <- paste0(base, "_thinkcell_", Sys.Date(), "_", n, ".xlsx")
-      n <- n + 1
-    }
-    used_names <- c(used_names, name)
-    write_tc_xlsx(r$data, file.path(work, name))
-  }
-
-  files <- basename(list.files(work, full.names = TRUE))
-  file_abs <- normalizePath(file, winslash = "/", mustWork = FALSE)
-  setwd(work)
-  utils::zip(zipfile = file_abs, files = files, flags = "-q -X")
+  labels <- sanitize_excel_sheet_names(
+    vapply(results, function(r) tc_or(r$filename_prefix, "chart"), character(1))
+  )
+  sheets <- stats::setNames(lapply(results, function(r) r$data), labels)
+  write_tc_xlsx(sheets, file)
   invisible(list(live_count = live_count, total = length(results)))
 }
 
@@ -1083,7 +1064,21 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
     })
 
     output$download_selected <- shiny::downloadHandler(
-      filename = function() paste0("export_history_selected_", Sys.Date(), ".zip"),
+      filename = function() {
+        entries <- selected_entries()
+        # A single selected entry's own id, or (for a multi-select that
+        # happens to be one whole bulk group) that group's shared
+        # favorite_download_id -- both are already known from the entries
+        # themselves, no extra minting needed. An arbitrary mixed selection
+        # has no single id to show, so it's omitted rather than guessed at.
+        id_part <- if (length(entries) == 1) {
+          tc_or(entries[[1]]$id, "")
+        } else {
+          group_ids <- unique(Filter(nzchar, vapply(entries, function(e) tc_or(e$favorite_download_id, ""), character(1))))
+          if (length(entries) > 0 && length(group_ids) == 1) group_ids else ""
+        }
+        paste0("export_history_selected_", if (nzchar(id_part)) paste0(id_part, "_") else "", Sys.Date(), ".zip")
+      },
       content = function(file) {
         entries <- selected_entries()
         shiny::req(length(entries) > 0)
@@ -1120,9 +1115,17 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
       filename = function() {
         entries <- selected_entries()
         if (length(entries) == 1) {
-          paste0(tc_or(entries[[1]]$filename_prefix, "chart"), "_thinkcell_regenerated_", Sys.Date(), ".xlsx")
+          # The *source* entry's own id -- the regenerated copy mints its
+          # own fresh id inside export_history_regenerate_excel_many(), only
+          # known once content() actually runs, so this traces the download
+          # back to what it was regenerated from instead.
+          id_part <- tc_or(entries[[1]]$id, "")
+          paste0(
+            tc_or(entries[[1]]$filename_prefix, "chart"), "_thinkcell_regenerated_",
+            if (nzchar(id_part)) paste0(id_part, "_") else "", Sys.Date(), ".xlsx"
+          )
         } else {
-          paste0("export_history_selected_thinkcell_regenerated_", Sys.Date(), ".zip")
+          paste0("export_history_selected_thinkcell_regenerated_", Sys.Date(), ".xlsx")
         }
       },
       content = function(file) {

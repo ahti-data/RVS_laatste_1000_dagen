@@ -325,14 +325,16 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
 #' @param specs Same shape as [tc_build_deck_from_specs()].
 #' @param work An already-created, writable directory.
 #' @param ppttc_exe Optional override for the think-cell executable.
-#' @param include_tables When `TRUE`, also write each spec's own
-#'   `<label>_table.xlsx` (and `<label>_raw.xlsx` when `raw_table` is
-#'   present) -- the same per-chart shape [tc_build_slide_zip()] ships for a
-#'   single chart. [tc_build_slide_deck_zip()] (Favorites' "Download
-#'   slides") wants this so that one zip has everything; the default `FALSE`
-#'   keeps [tc_build_deck_from_specs()] as-is, since it already writes its
-#'   own *combined*, cross-chart `favorites_thinkcell_tables.xlsx`/
-#'   `favorites_raw_tables.xlsx` before calling this.
+#' @param include_tables When `TRUE`, also write one combined
+#'   `favorites_thinkcell_tables.xlsx` (one sheet per spec) and, for any spec
+#'   with a `raw_table`, one combined `favorites_raw_tables.xlsx` -- the same
+#'   cross-chart combined-workbook shape [tc_build_deck_from_specs()] already
+#'   writes for its own callers, reused here (rather than one loose
+#'   `<label>_table.xlsx`/`<label>_raw.xlsx` pair per chart) so
+#'   [tc_build_slide_deck_zip()] (Favorites' "Download slides") ships one
+#'   workbook per format instead of N. The default `FALSE` keeps
+#'   [tc_build_deck_from_specs()] as-is, since it already writes those exact
+#'   files itself before calling this.
 #' @return Invisible `NULL`.
 tc_write_deck_files <- function(specs, work, ppttc_exe = NULL, include_tables = FALSE) {
   if (length(specs) == 0) {
@@ -343,24 +345,23 @@ tc_write_deck_files <- function(specs, work, ppttc_exe = NULL, include_tables = 
   as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
 
   if (include_tables) {
-    # A real file name, not an Excel sheet name -- sanitize_excel_sheet_names()
-    # doesn't strip '|', which several chart titles use as a separator (e.g.
-    # agg_plot_title's "sheet | outcome | maat") and which Windows forbids in
-    # file names, crashing the whole ZIP when it reached here unsanitized.
-    file_labels <- sanitize_filename_components(
+    labels <- sanitize_excel_sheet_names(
       vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
     )
-    for (i in seq_along(specs)) {
-      s <- specs[[i]]
-      # Same corner-cell provenance stamp the single-chart "Download Excel
-      # data (think-cell)" button carries (see tc_stamp_tc_matrix_corner()) --
-      # only the think-cell-shaped table gets it; raw_table's column 1 is a
-      # real data column, not the blank placeholder think-cell leaves.
-      stamped <- tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)
-      write_tc_xlsx(stamped, file.path(work, paste0(file_labels[[i]], "_table.xlsx")))
-      if (!is.null(s$raw_table)) {
-        write_tc_xlsx(as_df(s$raw_table), file.path(work, paste0(file_labels[[i]], "_raw.xlsx")))
-      }
+    # Same corner-cell provenance stamp the single-chart "Download Excel
+    # data (think-cell)" button carries (see tc_stamp_tc_matrix_corner()) --
+    # only the think-cell-shaped table gets it; raw_table's column 1 is a
+    # real data column, not the blank placeholder think-cell leaves.
+    sheets <- stats::setNames(
+      lapply(specs, function(s) tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)),
+      labels
+    )
+    write_tc_xlsx(sheets, file.path(work, "favorites_thinkcell_tables.xlsx"))
+
+    has_raw <- vapply(specs, function(s) !is.null(s$raw_table), logical(1))
+    if (any(has_raw)) {
+      raw_sheets <- stats::setNames(lapply(specs[has_raw], function(s) as_df(s$raw_table)), labels[has_raw])
+      write_tc_xlsx(raw_sheets, file.path(work, "favorites_raw_tables.xlsx"))
     }
   }
 
@@ -651,13 +652,21 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
 #' @param captures Named list of data-URIs from this session's bulk-capture
 #'   round (see `TC_CHART_CAPTURE_JS`'s `.tc-regenerate-go-btn` handler),
 #'   keyed by `module_id`.
+#' @param favorite_download_id_override Use this id for the whole batch
+#'   instead of minting a fresh one -- lets a caller pre-mint the id (see
+#'   `pending_slides_id`/`pending_selected_slides_id` in
+#'   `favorites_panel_server()`) *before* the click flow triggers the real
+#'   download, so a downloadHandler's `filename()` (resolved by Shiny before
+#'   its `content()` runs) can embed the exact same id used in the ZIP's own
+#'   provenance log.
 #' @return `list(specs, skipped)` -- `skipped` is a character vector of
 #'   labels for favorites whose chart wasn't live this session.
-favorites_build_specs_with_history <- function(entries = NULL, session, templates_dir = NULL, captures = list()) {
+favorites_build_specs_with_history <- function(entries = NULL, session, templates_dir = NULL, captures = list(),
+                                                favorite_download_id_override = NULL) {
   entries <- tc_or(entries, favorites_list())
   if (length(entries) == 0) return(list(specs = list(), skipped = character(0)))
 
-  favorite_download_id <- favorites_download_new_id()
+  favorite_download_id <- tc_or(favorite_download_id_override, favorites_download_new_id())
   # One shared timestamp for every entry logged from this click, rather than
   # each one's independently-generated (near-identical but not exact) time --
   # see export_history_add()'s created_at handling.
@@ -704,10 +713,16 @@ favorites_build_deck_zip <- function(zip_path, entries = NULL, session, ppttc_ex
 #' split). Still logged to Export History, same live-spec-building as
 #' [favorites_build_deck_zip()].
 #' @inheritParams favorites_build_deck_zip
+#' @param favorite_download_id_override Passed straight through to
+#'   [favorites_build_specs_with_history()] -- see its own doc comment.
 #' @return Character vector of skipped favorites' labels (invisibly).
 favorites_build_slides_zip <- function(zip_path, entries = NULL, session, ppttc_exe = NULL,
-                                        templates_dir = NULL, captures = list()) {
-  result <- favorites_build_specs_with_history(entries, session, templates_dir, captures)
+                                        templates_dir = NULL, captures = list(),
+                                        favorite_download_id_override = NULL) {
+  result <- favorites_build_specs_with_history(
+    entries, session, templates_dir, captures,
+    favorite_download_id_override = favorite_download_id_override
+  )
   tc_build_slide_deck_zip(result$specs, zip_path, ppttc_exe)
   invisible(result$skipped)
 }
@@ -772,6 +787,17 @@ favorites_selections_inline <- function(selections, max_chars = 160) {
   out
 }
 
+#' Same checkbox-layout fix as `utils/export_history.R`'s
+#' `TC_EXPORT_HISTORY_CSS` (see that constant's own doc comment for why),
+#' just scoped to `.tc-favorites` instead -- duplicated rather than shared
+#' since each panel owns its own scoped stylesheet by convention here.
+TC_FAVORITES_CSS <- r"(
+.tc-favorites .tc-row-checkbox .shiny-input-container { width: auto; min-width: 0; margin-bottom: 0; }
+.tc-favorites .checkbox { margin: 0; }
+.tc-favorites .checkbox label { padding-left: 0; min-height: 0; }
+.tc-favorites .checkbox label input[type="checkbox"] { position: static; margin: 0; }
+)"
+
 #' UI for a "Favorites" tab: the saved list plus a combined download.
 #' @param id Module id.
 #' @param intro Optional override for the intro paragraph (a single string).
@@ -780,7 +806,8 @@ favorites_selections_inline <- function(selections, max_chars = 160) {
 #'   [favorites_panel_server()]'s `tab_label_filter`).
 favorites_panel_ui <- function(id, intro = NULL) {
   ns <- shiny::NS(id)
-  shiny::tagList(
+  shiny::tags$div(
+    class = "tc-favorites",
     shiny::h3("Favorites"),
     shiny::p(class = "text-muted", tc_or(
       intro,
@@ -796,7 +823,9 @@ favorites_panel_ui <- function(id, intro = NULL) {
     shiny::actionButton(ns("remove_all"), "Remove all", class = "btn-default"),
     shiny::tags$hr(),
     shiny::uiOutput(ns("list")),
-    shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS))
+    shiny::uiOutput(ns("selection_banner")),
+    shiny::tags$script(shiny::HTML(TC_CHART_CAPTURE_JS)),
+    shiny::tags$style(shiny::HTML(TC_FAVORITES_CSS))
   )
 }
 
@@ -829,6 +858,14 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
         Filter(function(e) identical(tc_or(e$tab_label, ""), tab_label_filter), entries)
       }
     )
+
+    # Selection state for the checkbox-driven bottom banner -- same pattern
+    # as `utils/export_history.R`'s own `selected`/`registered_checkboxes`
+    # (see that module's doc comment for why a reactiveValues + lazy
+    # one-time observeEvent registration is needed instead of reading
+    # `input[[...]]` directly).
+    selected <- shiny::reactiveValues()
+    registered_checkboxes <- new.env()
 
     output$list <- shiny::renderUI({
       entries <- entries_reactive()
@@ -865,8 +902,15 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
             "gap:12px; padding:8px 0; border-bottom:1px solid #eee;"
           ),
           shiny::tags$div(
-            shiny::tags$strong(tc_or(e$label, "(untitled)")),
-            details
+            style = "display:flex; gap:8px; align-items:flex-start;",
+            shiny::tags$div(
+              class = "tc-row-checkbox",
+              shiny::checkboxInput(session$ns(paste0("sel_", e$id)), NULL, value = isTRUE(selected[[e$id]]))
+            ),
+            shiny::tags$div(
+              shiny::tags$strong(tc_or(e$label, "(untitled)")),
+              details
+            )
           ),
           shiny::actionButton(session$ns(paste0("remove_", e$id)), "Remove",
                               class = "btn-default btn-sm")
@@ -884,6 +928,34 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
           favorites_remove(e$id)
         }, ignoreInit = TRUE, once = TRUE)
       })
+    })
+
+    # Same lazy-registration pattern as the removal observers above, but for
+    # each entry's own selection checkbox -- an observeEvent isn't
+    # idempotent, so this must only ever register once per entry id.
+    shiny::observe({
+      ids <- vapply(entries_reactive(), function(e) e$id, character(1))
+      new_ids <- Filter(function(rid) !exists(rid, envir = registered_checkboxes, inherits = FALSE), ids)
+      lapply(new_ids, function(rid) {
+        assign(rid, TRUE, envir = registered_checkboxes)
+        input_id <- paste0("sel_", rid)
+        shiny::observeEvent(input[[input_id]], {
+          selected[[rid]] <- isTRUE(input[[input_id]])
+        }, ignoreInit = TRUE, ignoreNULL = FALSE)
+      })
+    })
+
+    # The whole selection is just whichever currently-displayed favorites
+    # have their own checkbox checked.
+    selected_entries <- shiny::reactive({
+      Filter(function(e) isTRUE(selected[[e$id]]), entries_reactive())
+    })
+
+    shiny::observeEvent(input$clear_selection, {
+      for (rid in ls(registered_checkboxes)) {
+        selected[[rid]] <- FALSE
+        shiny::updateCheckboxInput(session, paste0("sel_", rid), value = FALSE)
+      }
     })
 
     # Surfaced after any bulk download that skipped favorites whose chart
@@ -945,17 +1017,28 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
     })
 
     pending_slides_capture <- shiny::reactiveVal(list())
+    # Minted here, not inside favorites_build_slides_zip(), for the same
+    # reason as chart_downloads.R's own pending_slide_id: Shiny resolves
+    # output$download_all_slides's filename() before running its content(),
+    # so the batch id has to exist before the click flow triggers the real
+    # download.
+    pending_slides_id <- shiny::reactiveVal(NULL)
     shiny::observeEvent(input$slides_capture, {
       pending_slides_capture(tc_or(input$slides_capture$captures, list()))
+      pending_slides_id(favorites_download_new_id())
       session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("download_all_slides")))
     }, ignoreInit = TRUE)
 
     output$download_all_slides <- shiny::downloadHandler(
-      filename = function() paste0("favorites_slides_", Sys.Date(), ".zip"),
+      filename = function() {
+        id_part <- tc_or(pending_slides_id(), "")
+        paste0("favorites_slides_", if (nzchar(id_part)) paste0(id_part, "_") else "", Sys.Date(), ".zip")
+      },
       content = function(file) {
         entries <- entries_reactive()
         skipped <- favorites_build_slides_zip(
-          file, entries = entries, session = session, captures = pending_slides_capture()
+          file, entries = entries, session = session, captures = pending_slides_capture(),
+          favorite_download_id_override = pending_slides_id()
         )
         notify_skipped(skipped, length(entries))
       }
@@ -985,6 +1068,102 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
     shiny::observeEvent(input$remove_all_confirm, {
       favorites_remove_ids(vapply(entries_reactive(), function(e) e$id, character(1)))
       shiny::removeModal()
+    })
+
+    output$download_selected_raw <- shiny::downloadHandler(
+      filename = function() paste0("favorites_selected_raw_", Sys.Date(), ".xlsx"),
+      content = function(file) {
+        entries <- selected_entries()
+        shiny::req(length(entries) > 0)
+        skipped <- favorites_build_raw_xlsx(file, entries = entries, session = session)
+        notify_skipped(skipped, length(entries))
+      }
+    )
+
+    output$download_selected_thinkcell <- shiny::downloadHandler(
+      filename = function() paste0("favorites_selected_thinkcell_", Sys.Date(), ".xlsx"),
+      content = function(file) {
+        entries <- selected_entries()
+        shiny::req(length(entries) > 0)
+        skipped <- favorites_build_thinkcell_xlsx(file, entries = entries, session = session)
+        notify_skipped(skipped, length(entries))
+      }
+    )
+
+    # "Download selected slides" needs the same live-capture round trip as
+    # "Download slides" above, just scoped to the selected favorites' own
+    # module ids instead of every favorite's.
+    pending_selected_slides_capture <- shiny::reactiveVal(list())
+    pending_selected_slides_id <- shiny::reactiveVal(NULL)
+    shiny::observeEvent(input$selected_slides_capture, {
+      pending_selected_slides_capture(tc_or(input$selected_slides_capture$captures, list()))
+      pending_selected_slides_id(favorites_download_new_id())
+      session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("download_selected_slides")))
+    }, ignoreInit = TRUE)
+
+    output$download_selected_slides <- shiny::downloadHandler(
+      filename = function() {
+        id_part <- tc_or(pending_selected_slides_id(), "")
+        paste0("favorites_selected_slides_", if (nzchar(id_part)) paste0(id_part, "_") else "", Sys.Date(), ".zip")
+      },
+      content = function(file) {
+        entries <- selected_entries()
+        shiny::req(length(entries) > 0)
+        skipped <- favorites_build_slides_zip(
+          file, entries = entries, session = session, captures = pending_selected_slides_capture(),
+          favorite_download_id_override = pending_selected_slides_id()
+        )
+        notify_skipped(skipped, length(entries))
+      }
+    )
+    # Same reasoning as output$download_all_slides's own outputOptions() call.
+    shiny::outputOptions(output, "download_selected_slides", suspendWhenHidden = FALSE)
+
+    shiny::observeEvent(input$remove_selected, {
+      n <- length(selected_entries())
+      shiny::req(n > 0)
+      shiny::showModal(shiny::modalDialog(
+        title = "Remove selected favorites?",
+        sprintf("This deletes %d selected favorite(s). This can't be undone.", n),
+        footer = shiny::tagList(
+          shiny::modalButton("Cancel"),
+          shiny::actionButton(session$ns("remove_selected_confirm"), "Remove selected", class = "btn-danger")
+        )
+      ))
+    })
+
+    shiny::observeEvent(input$remove_selected_confirm, {
+      favorites_remove_ids(vapply(selected_entries(), function(e) e$id, character(1)))
+      shiny::removeModal()
+    })
+
+    output$selection_banner <- shiny::renderUI({
+      entries <- selected_entries()
+      if (length(entries) == 0) return(NULL)
+      module_ids <- unique(Filter(nzchar, vapply(entries, function(e) tc_or(e$module_id, ""), character(1))))
+      shiny::tags$div(
+        style = paste(
+          "position:fixed; left:0; right:0; bottom:0; z-index:1000;",
+          "background:#111827; color:#fff; padding:10px 20px;",
+          "display:flex; align-items:center; justify-content:center; gap:16px; flex-wrap:wrap;",
+          "box-shadow:0 -2px 8px rgba(0,0,0,0.15);"
+        ),
+        sprintf("%d favorite(s) selected", length(entries)),
+        shiny::actionLink(session$ns("clear_selection"), "Clear selection", style = "color:#93C5FD;"),
+        shiny::downloadButton(session$ns("download_selected_raw"), "Download selected (raw)", class = "btn-default btn-sm"),
+        shiny::downloadButton(session$ns("download_selected_thinkcell"), "Download selected (think-cell)", class = "btn-default btn-sm"),
+        shiny::actionButton(
+          session$ns("download_selected_slides_go"), "Download selected slides",
+          class = "btn-primary btn-sm tc-regenerate-go-btn",
+          `data-module-ids` = jsonlite::toJSON(module_ids),
+          `data-capture-input-id` = session$ns("selected_slides_capture")
+        ),
+        shiny::tags$span(
+          style = "display:none;",
+          shiny::downloadButton(session$ns("download_selected_slides"), "")
+        ),
+        shiny::actionButton(session$ns("remove_selected"), "Remove selected", class = "btn-danger btn-sm")
+      )
     })
   })
 }

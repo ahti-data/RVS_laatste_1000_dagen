@@ -565,7 +565,7 @@ test_that("export_history_regenerate_excel_many with one entry writes a bare xls
   })
 })
 
-test_that("export_history_regenerate_excel_many with 2+ entries zips one xlsx per entry", {
+test_that("export_history_regenerate_excel_many with 2+ entries writes one combined workbook, one sheet per entry, never a zip", {
   skip_if_not_installed("readxl")
   with_history_dir({
     e1 <- tc_history_capture(
@@ -581,13 +581,12 @@ test_that("export_history_regenerate_excel_many with 2+ entries zips one xlsx pe
     e2$id <- export_history_new_id()
     export_history_add(e2)
 
-    z <- tempfile(fileext = ".zip")
-    res <- export_history_regenerate_excel_many(list(e1, e2), z, fake_session())
+    out <- tempfile(fileext = ".xlsx")
+    res <- export_history_regenerate_excel_many(list(e1, e2), out, fake_session())
     expect_equal(res$total, 2)
 
-    files <- utils::unzip(z, list = TRUE)$Name
-    expect_true(any(grepl("^revenue_chart_thinkcell_.*\\.xlsx$", files)))
-    expect_true(any(grepl("^cost_chart_thinkcell_.*\\.xlsx$", files)))
+    sheets <- readxl::excel_sheets(out)
+    expect_equal(sheets, c("revenue_chart", "cost_chart"))
 
     expect_length(export_history_list(), 4)
   })

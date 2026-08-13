@@ -52,6 +52,16 @@ dictionary_scope_order <- function(scopes_present) {
   )
 }
 
+#' Shiny's own `.shiny-input-container` defaults every input's wrapper to
+#' `width: 300px; margin-bottom: 15px` -- fine for a form, but it misaligns
+#' an inline textInput sitting in a single-line flex row alongside a raw-name
+#' code chip and Save/Delete buttons (see `output$list` below). Scoped to
+#' `.tc-dict-pretty-input`, same reasoning as `TC_FAVORITES_CSS`/
+#' `TC_EXPORT_HISTORY_CSS`'s own row-checkbox fix.
+TC_DICTIONARY_ADMIN_CSS <- r"(
+.tc-dict-pretty-input .shiny-input-container { width: 100%; margin-bottom: 0; }
+)"
+
 #' UI for the Dictionary admin panel.
 #' @param id Module id.
 dictionary_admin_ui <- function(id) {
@@ -73,7 +83,8 @@ dictionary_admin_ui <- function(id) {
     ),
     shiny::uiOutput(ns("status")),
     shiny::tags$hr(),
-    shiny::uiOutput(ns("list"))
+    shiny::uiOutput(ns("list")),
+    shiny::tags$style(shiny::HTML(TC_DICTIONARY_ADMIN_CSS))
   )
 }
 
@@ -86,7 +97,6 @@ dictionary_admin_ui <- function(id) {
 dictionary_admin_server <- function(id, poll_interval_ms = 2000) {
   shiny::moduleServer(id, function(input, output, session) {
     status_rv <- shiny::reactiveValues(message = NULL, ok = NA)
-    editing <- shiny::reactiveVal(NULL)
 
     entries_reactive <- shiny::reactivePoll(
       poll_interval_ms, session,
@@ -107,51 +117,30 @@ dictionary_admin_server <- function(id, poll_interval_ms = 2000) {
       }, entries)
     })
 
-    open_editor <- function(entry = NULL) {
-      is_new <- is.null(entry)
-      editing(entry)
+    # "Add entry" still uses a modal -- a brand-new entry needs raw_key +
+    # scope, fields an existing entry never changes, so there's no row for
+    # it to live inline in yet.
+    open_add_editor <- function() {
       shiny::showModal(shiny::modalDialog(
-        title = if (is_new) "Add dictionary entry" else "Edit dictionary entry",
-        if (is_new) {
-          shiny::tagList(
-            shiny::textInput(session$ns("edit_raw_key"), "Raw name (as it appears in the data source)"),
-            shiny::textInput(
-              session$ns("edit_scope"), "Scope (optional)",
-              placeholder = "e.g. a column name -- only needed if the same raw name means different things in different places"
-            )
-          )
-        } else {
-          shiny::tagList(
-            shiny::tags$p(shiny::tags$strong("Raw name: "), tc_or(entry$raw_key, "")),
-            shiny::tags$p(shiny::tags$strong("Scope: "), if (nzchar(tc_or(entry$scope, ""))) entry$scope else shiny::tags$em("(none)"))
-          )
-        },
-        shiny::textInput(session$ns("edit_pretty_label"), "Pretty label", value = tc_or(entry$pretty_label, "")),
+        title = "Add dictionary entry",
+        shiny::textInput(session$ns("edit_raw_key"), "Raw name (as it appears in the data source)"),
+        shiny::textInput(
+          session$ns("edit_scope"), "Scope (optional)",
+          placeholder = "e.g. a column name -- only needed if the same raw name means different things in different places"
+        ),
+        shiny::textInput(session$ns("edit_pretty_label"), "Pretty label"),
         footer = shiny::tagList(
-          if (!is_new) shiny::actionButton(session$ns("delete"), "Delete", class = "btn-danger"),
           shiny::modalButton("Cancel"),
           shiny::actionButton(session$ns("save"), "Save", class = "btn-primary")
         )
       ))
     }
 
-    shiny::observeEvent(input$add, open_editor(NULL), ignoreInit = TRUE)
-
-    shiny::observe({
-      entries <- filtered_entries()
-      lapply(entries, function(e) {
-        btn_id <- paste0("edit_", dict_entry_ui_id(e$raw_key, e$scope))
-        shiny::observeEvent(input[[btn_id]], {
-          open_editor(e)
-        }, ignoreInit = TRUE, once = TRUE)
-      })
-    })
+    shiny::observeEvent(input$add, open_add_editor(), ignoreInit = TRUE)
 
     shiny::observeEvent(input$save, {
-      current <- editing()
-      is_new <- is.null(current)
-      raw_key <- if (is_new) trimws(tc_or(input$edit_raw_key, "")) else current$raw_key
-      scope <- if (is_new) trimws(tc_or(input$edit_scope, "")) else tc_or(current$scope, "")
+      raw_key <- trimws(tc_or(input$edit_raw_key, ""))
+      scope <- trimws(tc_or(input$edit_scope, ""))
       pretty_label <- trimws(tc_or(input$edit_pretty_label, ""))
 
       if (!nzchar(raw_key) || !nzchar(pretty_label)) {
@@ -166,13 +155,48 @@ dictionary_admin_server <- function(id, poll_interval_ms = 2000) {
       shiny::removeModal()
     })
 
-    shiny::observeEvent(input$delete, {
-      current <- editing()
-      shiny::req(current)
-      dictionary_remove_entry(current$raw_key, tc_or(current$scope, ""))
-      status_rv$message <- sprintf("Removed '%s'.", current$raw_key)
-      status_rv$ok <- TRUE
-      shiny::removeModal()
+    # Every existing entry's pretty label is an always-visible, always-
+    # editable textInput right in its own row (see output$list below) --
+    # opening a category shows every entry ready to edit at once, no
+    # per-entry click-to-reveal step. Each row's own Save/Delete buttons are
+    # lazily registered exactly once per row id, same reasoning as
+    # favorites_panel_server()'s own per-row observers: an observeEvent
+    # isn't idempotent, so re-registering on every re-render would stack
+    # duplicate handlers.
+    registered_row_buttons <- new.env()
+    shiny::observe({
+      entries <- filtered_entries()
+      new_rows <- Filter(
+        function(e) !exists(dict_entry_ui_id(e$raw_key, e$scope), envir = registered_row_buttons, inherits = FALSE),
+        entries
+      )
+      lapply(new_rows, function(e) {
+        row_id <- dict_entry_ui_id(e$raw_key, e$scope)
+        assign(row_id, TRUE, envir = registered_row_buttons)
+        raw_key <- e$raw_key
+        scope <- tc_or(e$scope, "")
+        pretty_input_id <- paste0("pretty_", row_id)
+        save_id <- paste0("save_", row_id)
+        delete_id <- paste0("delete_", row_id)
+
+        shiny::observeEvent(input[[save_id]], {
+          pretty_label <- trimws(tc_or(input[[pretty_input_id]], ""))
+          if (!nzchar(pretty_label)) {
+            status_rv$message <- "The pretty label is required."
+            status_rv$ok <- FALSE
+            return(invisible(NULL))
+          }
+          dictionary_set_entry(raw_key, scope, pretty_label)
+          status_rv$message <- sprintf("Saved '%s' -> '%s'.", raw_key, pretty_label)
+          status_rv$ok <- TRUE
+        }, ignoreInit = TRUE)
+
+        shiny::observeEvent(input[[delete_id]], {
+          dictionary_remove_entry(raw_key, scope)
+          status_rv$message <- sprintf("Removed '%s'.", raw_key)
+          status_rv$ok <- TRUE
+        }, ignoreInit = TRUE)
+      })
     })
 
     output$status <- shiny::renderUI({
@@ -201,17 +225,20 @@ dictionary_admin_server <- function(id, poll_interval_ms = 2000) {
         # the actual "no scope" group.
         group_entries <- groups[[match(sc, names(groups))]]
         rows <- lapply(group_entries, function(e) {
-          btn_id <- paste0("edit_", dict_entry_ui_id(e$raw_key, e$scope))
+          row_id <- dict_entry_ui_id(e$raw_key, e$scope)
           shiny::tags$div(
             style = paste(
               "display:flex; justify-content:space-between; align-items:center;",
-              "gap:12px; padding:8px 0; border-bottom:1px solid #eee;"
+              "gap:8px; padding:8px 0; border-bottom:1px solid #eee;"
             ),
-            shiny::tags$div(
-              shiny::tags$code(tc_or(e$raw_key, "")),
-              shiny::tags$div(style = "margin-top:2px;", tc_or(e$pretty_label, ""))
+            shiny::tags$code(style = "flex:0 0 auto;", tc_or(e$raw_key, "")),
+            shiny::div(
+              class = "tc-dict-pretty-input",
+              style = "flex:1 1 auto;",
+              shiny::textInput(session$ns(paste0("pretty_", row_id)), NULL, value = tc_or(e$pretty_label, ""), width = "100%")
             ),
-            shiny::actionButton(session$ns(btn_id), "Edit", class = "btn-default btn-sm")
+            shiny::actionButton(session$ns(paste0("save_", row_id)), "Save", class = "btn-primary btn-sm"),
+            shiny::actionButton(session$ns(paste0("delete_", row_id)), "Delete", class = "btn-danger btn-sm")
           )
         })
         shiny::tags$details(

@@ -3,6 +3,8 @@ library(testthat)
 source(file.path("..", "..", "utils", "format_thinkcell_download.R"))
 source(file.path("..", "..", "utils", "slide_download.R"))
 source(file.path("..", "..", "utils", "dictionary.R"))
+source(file.path("..", "..", "utils", "favorites.R"))
+source(file.path("..", "..", "utils", "export_history.R"))
 source(file.path("..", "..", "utils", "chart_downloads.R"))
 
 with_dictionary_path <- function(code) {
@@ -200,6 +202,142 @@ test_that("relabeling an ordered factor column relabels its levels too, instead 
       expect_true(is.factor(relabeled))
       expect_equal(levels(relabeled), c("Kwartaal 2", "Kwartaal 1"))
       expect_equal(as.character(relabeled), c("Kwartaal 2", "Kwartaal 1"))
+    })
+  })
+})
+
+with_history_dir_local <- function(code) {
+  dir <- tempfile("export_history_")
+  old <- Sys.getenv("SHINY_EXPORT_HISTORY_DIR", unset = NA)
+  Sys.setenv(SHINY_EXPORT_HISTORY_DIR = dir)
+  on.exit({
+    if (is.na(old)) Sys.unsetenv("SHINY_EXPORT_HISTORY_DIR") else Sys.setenv(SHINY_EXPORT_HISTORY_DIR = old)
+    unlink(dir, recursive = TRUE)
+  }, add = TRUE)
+  force(code)
+}
+
+# chart_data_downloads_server() has no templates_dir override -- its
+# register_slide gate (and everything inside it, including output$slide)
+# only exists when tc_template_available() can resolve a real template via
+# tc_find_templates_dir(), which searches APP_ROOT/getwd() -- neither of
+# which is the repo root while tests run from tests/testthat/. Defining
+# APP_ROOT here (as a real deployed app.R does) is the only way to reach
+# that branch in a test.
+with_app_root_local <- function(code) {
+  had_root <- exists("APP_ROOT", envir = globalenv())
+  old_root <- if (had_root) get("APP_ROOT", envir = globalenv()) else NULL
+  assign("APP_ROOT", normalizePath(file.path("..", "..")), envir = globalenv())
+  on.exit({
+    if (had_root) assign("APP_ROOT", old_root, envir = globalenv()) else rm("APP_ROOT", envir = globalenv())
+  }, add = TRUE)
+  force(code)
+}
+
+test_that("build_export_now() reuses a pre-minted chart_id_override instead of generating a fresh one", {
+  # This is the plumbing output$slide's filename() and content() both rely
+  # on: filename() (resolved by Shiny before content() runs) reads
+  # pending_slide_id() to embed the same id build_export_now() below ends
+  # up logging to Export History -- see the observeEvent(input$slide_capture)
+  # that mints it in utils/chart_downloads.R.
+  skip_if_not(dir.exists(file.path("..", "..", "templates")), "templates directory not available")
+  with_app_root_local({
+  with_history_dir_local({
+    shiny::testServer(chart_data_downloads_server, args = list(
+      id = "test_chart",
+      data = shiny::reactive(sample_data()),
+      chart_type = "stacked_bar",
+      category_col = "quarter",
+      series_col = "product",
+      value_col = "revenue",
+      agg_fun = NULL
+    ), {
+      pending_slide_id("preminted_id_123")
+
+      # build_export_now() writes the history entry (and mints/reuses
+      # chart_id) before it ever touches utils::zip() -- so this still
+      # verifies the id override regardless of whether zip is installed on
+      # the machine running the test.
+      zip_path <- tempfile(fileext = ".zip")
+      suppressWarnings(build_export_now(zip_path, chart_id_override = pending_slide_id()))
+
+      entries <- export_history_list()
+      expect_length(entries, 1)
+      expect_equal(entries[[1]]$id, "preminted_id_123")
+    })
+  })
+  })
+})
+
+test_that("the raw Excel download uses the same matrix shape as the think-cell download, not the unreshaped plotting data frame", {
+  skip_if_not_installed("readxl")
+  shiny::testServer(chart_data_downloads_server, args = list(
+    id = "test_chart",
+    data = shiny::reactive(sample_data()),
+    chart_type = "stacked_bar",
+    category_col = "quarter",
+    series_col = "product",
+    value_col = "revenue",
+    agg_fun = NULL
+  ), {
+    raw_path <- output$raw
+    tc_path <- output$thinkcell
+
+    raw_df <- as.data.frame(readxl::read_excel(raw_path))
+    tc_df <- as.data.frame(readxl::read_excel(tc_path))
+
+    expect_equal(dim(raw_df), dim(tc_df))
+    # Every column past the blank first (corner-cell) one is the same
+    # matrix shape -- category values as column headers, one row per
+    # series. Only the corner-cell provenance stamp itself still differs:
+    # think-cell's own download carries one, raw intentionally doesn't.
+    expect_equal(names(raw_df)[-1], names(tc_df)[-1])
+    expect_false(grepl("^LOG \\|", names(raw_df)[[1]]))
+    expect_true(grepl("^LOG \\|", names(tc_df)[[1]]))
+  })
+})
+
+test_that("the raw Excel download falls back to the unreshaped data frame for a chart type think-cell doesn't support", {
+  shiny::testServer(chart_data_downloads_server, args = list(
+    id = "test_chart",
+    data = shiny::reactive(sample_data()),
+    chart_type = "scatter",
+    category_col = "quarter",
+    series_col = "product",
+    value_col = "revenue",
+    agg_fun = NULL
+  ), {
+    raw_path <- output$raw
+    skip_if_not_installed("readxl")
+    raw_df <- as.data.frame(readxl::read_excel(raw_path))
+    expect_equal(nrow(raw_df), nrow(sample_data()))
+    expect_true(all(c("quarter", "product", "revenue") %in% names(raw_df)))
+  })
+})
+
+test_that("the think-cell download's corner cell includes the dictionary crosswalk when the checkbox is on, and omits it when off", {
+  skip_if_not_installed("readxl")
+  with_dictionary_path({
+    dictionary_set_entry("Q1", "quarter", "Kwartaal 1")
+
+    shiny::testServer(chart_data_downloads_server, args = list(
+      id = "test_chart",
+      data = shiny::reactive(sample_data()),
+      chart_type = "stacked_bar",
+      category_col = "quarter",
+      series_col = "product",
+      value_col = "revenue",
+      agg_fun = NULL
+    ), {
+      session$setInputs(dictionary_format = TRUE)
+      on_path <- output$thinkcell
+      header_on <- names(readxl::read_excel(on_path, n_max = 0))
+      expect_true(grepl("dictionary=Q1->Kwartaal 1", header_on[[1]], fixed = TRUE))
+
+      session$setInputs(dictionary_format = FALSE)
+      off_path <- output$thinkcell
+      header_off <- names(readxl::read_excel(off_path, n_max = 0))
+      expect_false(grepl("dictionary=", header_off[[1]], fixed = TRUE))
     })
   })
 })

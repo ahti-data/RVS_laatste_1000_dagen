@@ -426,6 +426,33 @@ chart_data_downloads_server <- function(
       dictionary_relabel(export_series_order, scope = scope_or_col(series_scope, series_col), fallback = identity_fallback)
     })
 
+    # For the corner-cell log (see tc_build_datasheet_log()'s
+    # dictionary_crosswalk param): every distinct raw category/series value
+    # that a real dictionary hit actually changed for this specific
+    # download, deduplicated across both columns. A value with no matching
+    # entry never contributes a pair (relabel_column()'s identity fallback
+    # leaves it unchanged, so raw == pretty and it's filtered out below) --
+    # this stays empty, and adds nothing to the log, whenever the checkbox
+    # is off or no value in this chart happens to be in the dictionary.
+    dictionary_crosswalk <- shiny::reactive({
+      if (!isTRUE(input$dictionary_format)) return(NULL)
+      df <- raw_data()
+      pairs <- character(0)
+      collect <- function(col, scope) {
+        if (!(col %in% names(df))) return(character(0))
+        raw_vals <- unique(as.character(df[[col]]))
+        raw_vals <- raw_vals[!is.na(raw_vals)]
+        pretty_vals <- dictionary_relabel(raw_vals, scope = scope, fallback = identity_fallback)
+        changed <- raw_vals != pretty_vals
+        stats::setNames(pretty_vals[changed], raw_vals[changed])
+      }
+      pairs <- c(
+        collect(category_col, scope_or_col(category_scope, category_col)),
+        collect(series_col, scope_or_col(series_scope, series_col))
+      )
+      pairs[!duplicated(names(pairs))]
+    })
+
     # The template that will be used for the slide: the user's manual choice
     # (picked from the TC_TEMPLATE_MODAL_JS grid, see below) if set, otherwise
     # the one auto-detected from the displayed figure. A plain reactiveVal,
@@ -543,7 +570,39 @@ chart_data_downloads_server <- function(
         paste0(filename_prefix, "_raw_", Sys.Date(), ".xlsx")
       },
       content = function(file) {
-        write_tc_xlsx(data(), file)
+        # Same matrix shape as "Download data (think-cell)" -- opening the
+        # two side by side used to show a mismatch (e.g. a time column as
+        # its own row of values here, but as the header row there) since
+        # this button used to write data() completely unreshaped. Only the
+        # corner-cell provenance stamp still differs: think-cell's own
+        # button carries one (utils/slide_download.R's
+        # tc_build_datasheet_log()), this one intentionally doesn't, since
+        # this download isn't logged to Export History either.
+        resolved_chart_type <- resolve_tc_chart_type(chart_type)
+        if (!is_tc_chart_type_supported(resolved_chart_type)) {
+          write_tc_xlsx(data(), file)
+          return(invisible(NULL))
+        }
+
+        tc_data <- format_tc_data(
+          df = data(),
+          chart_type = resolved_chart_type,
+          category_col = category_col,
+          series_col = series_col,
+          value_col = value_col,
+          agg_fun = agg_fun,
+          category_order = resolved_category_order(),
+          series_order = resolved_series_order(),
+          waterfall_end_col = waterfall_end_col,
+          waterfall_subtotal_cols = waterfall_subtotal_cols,
+          facet_col = facet_col
+        )
+        ordered_matrix <- tc_resolve_slide_matrix(
+          if (is_tc_workbook_list(tc_data)) tc_data[[1]] else tc_data,
+          resolved_chart_type, NULL, tc_or(input$slide_order, "auto")
+        )
+        tc_data <- tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
+        write_tc_xlsx(tc_data, file)
       }
     )
 
@@ -605,7 +664,8 @@ chart_data_downloads_server <- function(
             selections      = tc_ctx_selections(module_id = id),
             source_output   = resolve_opt(source_output),
             source_sheet    = resolve_opt(source_sheet),
-            source_mtime    = resolve_opt(source_mtime)
+            source_mtime    = resolve_opt(source_mtime),
+            dictionary_crosswalk = dictionary_crosswalk()
           )
           write_tc_xlsx(tc_stamp_tc_matrix_corner(tc_data, log_line), file)
         }
@@ -728,6 +788,14 @@ chart_data_downloads_server <- function(
       # build_export_now() treats that exactly like "no image available".
       pending_slide_capture <- shiny::reactiveVal(NULL)
 
+      # Minted by the same observer, for the same reason: Shiny resolves a
+      # downloadHandler's filename() before running its content() function,
+      # so the id that will end up in the ZIP's provenance log has to be
+      # generated *before* the click flow triggers the real download, not
+      # inside build_export_now() as it used to be -- otherwise filename()
+      # would have no id to embed yet.
+      pending_slide_id <- shiny::reactiveVal(NULL)
+
       # Builds this chart's slide ZIP from a freshly-derived spec and logs it
       # to Export History. Used by the "Download slide" button below, and
       # (via the chart registry's build_zip) by Export History's own
@@ -739,7 +807,7 @@ chart_data_downloads_server <- function(
       # default, distinguishes "not supplied" (this chart's own button,
       # which should use its own `pending_slide_capture()`) from "supplied,
       # but no image" (Export History's round found nothing to use either).
-      build_export_now <- function(zip_path, favorite_download_id = NULL, captured_image) {
+      build_export_now <- function(zip_path, favorite_download_id = NULL, captured_image, chart_id_override = NULL) {
         image_to_use <- if (missing(captured_image)) pending_slide_capture() else captured_image
         spec <- build_export_spec()
 
@@ -772,7 +840,14 @@ chart_data_downloads_server <- function(
             module_id         = id,
             filename_prefix   = spec$filename_prefix
           )
-          history_entry$id <- export_history_new_id()
+          # chart_id_override lets a caller mint this download's id *before*
+          # calling build_export_now() -- needed so the button's own
+          # downloadHandler filename() (which Shiny resolves before running
+          # this content function) can embed the exact same id in the
+          # downloaded ZIP's file name (see the pending_slide_id reactiveVal
+          # below). Regenerate/registry callers omit it and get a fresh id
+          # here, same as before.
+          history_entry$id <- tc_or(chart_id_override, export_history_new_id())
           chart_id <- export_history_add(history_entry)
           asset_path <- export_history_asset_path(chart_id)
           tc_write_captured_asset(image_to_use, asset_path)
@@ -817,10 +892,15 @@ chart_data_downloads_server <- function(
 
       output$slide <- shiny::downloadHandler(
         filename = function() {
-          paste0(filename_prefix, "_slide_", Sys.Date(), ".zip")
+          id_part <- tc_or(pending_slide_id(), "")
+          paste0(
+            filename_prefix, "_slide_",
+            if (nzchar(id_part)) paste0(id_part, "_") else "",
+            Sys.Date(), ".zip"
+          )
         },
         content = function(file) {
-          build_export_now(file)
+          build_export_now(file, chart_id_override = pending_slide_id())
         }
       )
       # This download link lives inside a `display:none` wrapper (see
@@ -834,9 +914,12 @@ chart_data_downloads_server <- function(
       # either with a real screenshot or `image: NULL` (capture failed,
       # timed out, or no plot_output_id was wired) -- either way, this is the
       # signal to finally trigger the real (hidden) download, exactly once
-      # per click.
+      # per click. Also mints this download's id here (see pending_slide_id
+      # above) -- the earliest point before Shiny resolves output$slide's
+      # own filename().
       shiny::observeEvent(input$slide_capture, {
         pending_slide_capture(input$slide_capture$image)
+        pending_slide_id(export_history_new_id())
         session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("slide")))
       }, ignoreInit = TRUE)
 

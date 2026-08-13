@@ -954,11 +954,20 @@ tc_selection_kv_pairs <- function(selections) {
 #'   is when the *source data itself* was last edited.
 #' @return A single-line character string, e.g.
 #'   `"LOG | timestamp=...; download_id=...; output=...; sheet=...; source_updated=...; dashboard=...; tab=...; sub-tab=...; chart_type=...; opt=val"`.
+#' @param dictionary_crosswalk Optional named character vector -- names are
+#'   raw values, values their dictionary-relabeled pretty counterparts --
+#'   appended as its own `dictionary=raw1->pretty1|raw2->pretty2` segment
+#'   when non-empty. Built by [chart_data_downloads_server()]
+#'   (`utils/chart_downloads.R`) from whichever distinct category/series
+#'   values a real dictionary hit actually changed for that specific
+#'   download -- a value with no dictionary entry (or whose "Format from
+#'   dictionary" checkbox is off) never contributes a pair, keeping this
+#'   compact rather than listing every value in the chart.
 tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
                                    chart_type, selections, chart_id = NULL,
                                    favorite_download_id = NULL,
                                    source_output = NULL, source_sheet = NULL,
-                                   source_mtime = NULL) {
+                                   source_mtime = NULL, dictionary_crosswalk = NULL) {
   parts <- c(sprintf("timestamp=%s", tc_now()))
   if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
     parts <- c(parts, sprintf("download_id=%s", chart_id))
@@ -985,6 +994,13 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
   pairs <- tc_selection_kv_pairs(selections)
   if (length(pairs) > 0) {
     parts <- c(parts, vapply(pairs, function(p) sprintf("%s=%s", p$name, p$value), character(1)))
+  }
+  if (!is.null(dictionary_crosswalk) && length(dictionary_crosswalk) > 0) {
+    crosswalk <- paste(
+      sprintf("%s->%s", names(dictionary_crosswalk), unname(dictionary_crosswalk)),
+      collapse = "|"
+    )
+    parts <- c(parts, sprintf("dictionary=%s", crosswalk))
   }
   paste0("LOG | ", paste(parts, collapse = "; "))
 }

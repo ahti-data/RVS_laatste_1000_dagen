@@ -173,6 +173,21 @@ test_that("datasheet log includes favorite_download_id only when supplied", {
   expect_false(grepl("favorite_download_id=", without_fdl, fixed = TRUE))
 })
 
+test_that("datasheet log includes a dictionary crosswalk only when supplied and non-empty", {
+  with_crosswalk <- tc_build_datasheet_log(
+    "D", "T", "S", "line", list(),
+    dictionary_crosswalk = c(bedragwlzzin = "WLZ kosten", zvwktotaal = "ZVW kosten totaal")
+  )
+  empty_crosswalk <- tc_build_datasheet_log("D", "T", "S", "line", list(), dictionary_crosswalk = character(0))
+  without_crosswalk <- tc_build_datasheet_log("D", "T", "S", "line", list())
+
+  expect_true(grepl(
+    "dictionary=bedragwlzzin->WLZ kosten\\|zvwktotaal->ZVW kosten totaal", with_crosswalk
+  ))
+  expect_false(grepl("dictionary=", empty_crosswalk, fixed = TRUE))
+  expect_false(grepl("dictionary=", without_crosswalk, fixed = TRUE))
+})
+
 test_that("datasheet log always stamps a generation timestamp", {
   line <- tc_build_datasheet_log("D", "T", "S", "line", list())
   expect_true(grepl("timestamp=\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", line))
