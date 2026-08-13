@@ -269,7 +269,7 @@ test_that("build_export_now() reuses a pre-minted chart_id_override instead of g
   })
 })
 
-test_that("the raw Excel download uses the same matrix shape as the think-cell download, not the unreshaped plotting data frame", {
+test_that("the raw Excel download is the exact unpivoted plotting data frame, never the pivoted think-cell matrix", {
   skip_if_not_installed("readxl")
   shiny::testServer(chart_data_downloads_server, args = list(
     id = "test_chart",
@@ -280,24 +280,17 @@ test_that("the raw Excel download uses the same matrix shape as the think-cell d
     value_col = "revenue",
     agg_fun = NULL
   ), {
-    raw_path <- output$raw
-    tc_path <- output$thinkcell
-
-    raw_df <- as.data.frame(readxl::read_excel(raw_path))
-    tc_df <- as.data.frame(readxl::read_excel(tc_path))
-
-    expect_equal(dim(raw_df), dim(tc_df))
-    # Every column past the blank first (corner-cell) one is the same
-    # matrix shape -- category values as column headers, one row per
-    # series. Only the corner-cell provenance stamp itself still differs:
-    # think-cell's own download carries one, raw intentionally doesn't.
-    expect_equal(names(raw_df)[-1], names(tc_df)[-1])
+    raw_df <- as.data.frame(readxl::read_excel(output$raw))
+    # Long shape: the original columns, one row per plotted point -- NOT a
+    # pivoted matrix, and no corner-cell log (raw is just the data).
+    expect_equal(names(raw_df), c("quarter", "product", "revenue"))
+    expect_equal(nrow(raw_df), nrow(sample_data()))
     expect_false(grepl("^LOG \\|", names(raw_df)[[1]]))
-    expect_true(grepl("^LOG \\|", names(tc_df)[[1]]))
   })
 })
 
-test_that("the raw Excel download falls back to the unreshaped data frame for a chart type think-cell doesn't support", {
+test_that("the raw Excel download stays unpivoted even for a chart type think-cell doesn't support", {
+  skip_if_not_installed("readxl")
   shiny::testServer(chart_data_downloads_server, args = list(
     id = "test_chart",
     data = shiny::reactive(sample_data()),
@@ -307,11 +300,32 @@ test_that("the raw Excel download falls back to the unreshaped data frame for a 
     value_col = "revenue",
     agg_fun = NULL
   ), {
-    raw_path <- output$raw
-    skip_if_not_installed("readxl")
-    raw_df <- as.data.frame(readxl::read_excel(raw_path))
+    raw_df <- as.data.frame(readxl::read_excel(output$raw))
+    expect_equal(names(raw_df), c("quarter", "product", "revenue"))
     expect_equal(nrow(raw_df), nrow(sample_data()))
-    expect_true(all(c("quarter", "product", "revenue") %in% names(raw_df)))
+  })
+})
+
+test_that("the think-cell download uses the slide-embedded orientation (categories across the header), the transpose of format_tc_data's tc_data", {
+  skip_if_not_installed("readxl")
+  with_dictionary_path({
+    shiny::testServer(chart_data_downloads_server, args = list(
+      id = "test_chart",
+      data = shiny::reactive(sample_data()),
+      chart_type = "stacked_bar",
+      category_col = "quarter",
+      series_col = "product",
+      value_col = "revenue",
+      agg_fun = NULL
+    ), {
+      tc_df <- as.data.frame(readxl::read_excel(output$thinkcell), check.names = FALSE)
+      hdr <- names(tc_df)
+      expect_true(grepl("^LOG \\|", hdr[[1]]))
+      # Categories across the header (slide_matrix orientation); series are
+      # row labels, not column headers (which was tc_data orientation).
+      expect_setequal(hdr[-1], c("Q1", "Q2"))
+      expect_false(any(c("Product A", "Product B") %in% hdr))
+    })
   })
 })
 

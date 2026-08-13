@@ -137,6 +137,20 @@ test_that("tc_history_capture stores favorite_download_id and module_id", {
   expect_equal(entry$module_id, "my_chart_dl")
 })
 
+test_that("tc_history_capture records the dictionary_format flag and crosswalk", {
+  on <- tc_history_capture(
+    tc_data = sample_matrix(), chart_type = "line", filename_prefix = "my_chart",
+    dictionary_format = TRUE, dictionary_crosswalk = c(bedragwlzzin = "WLZ kosten")
+  )
+  off <- tc_history_capture(
+    tc_data = sample_matrix(), chart_type = "line", filename_prefix = "my_chart"
+  )
+  expect_true(on$dictionary_format)
+  expect_equal(on$dictionary_crosswalk, list(bedragwlzzin = "WLZ kosten"))
+  expect_false(off$dictionary_format)
+  expect_null(off$dictionary_crosswalk)
+})
+
 test_that("tc_history_capture falls back to filename_prefix when no subtab_label is set", {
   entry <- tc_history_capture(
     tc_data = sample_matrix(), chart_type = "waterfall",

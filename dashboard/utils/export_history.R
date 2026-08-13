@@ -199,7 +199,8 @@ tc_history_capture <- function(
     dashboard_title = "", tab_label = "", subtab_label = "",
     selections = NULL, source_output = NULL, source_sheet = NULL, source_mtime = NULL,
     favorite_download_id = NULL, module_id = NULL,
-    filename_prefix = "chart", templates_dir = NULL
+    filename_prefix = "chart", templates_dir = NULL,
+    dictionary_format = NULL, dictionary_crosswalk = NULL
 ) {
   override <- if (nzchar(tc_or(template_override, ""))) template_override else NULL
   template_path <- tc_template_for_chart_type(chart_type, templates_dir = templates_dir, override = override)
@@ -227,6 +228,10 @@ tc_history_capture <- function(
     slide_order       = slide_order,
     slide_title       = slide_title,
     figure_title      = figure_title,
+    dictionary_format = isTRUE(dictionary_format),
+    # Stored so a later exact-snapshot redownload reproduces the same
+    # corner-cell crosswalk (a live regenerate recomputes it fresh instead).
+    dictionary_crosswalk = if (length(dictionary_crosswalk) > 0) as.list(dictionary_crosswalk) else NULL,
     tc_data_table     = favorites_table_to_storage(tc_data),
     slide_matrix_table = if (!is.null(slide_matrix)) favorites_table_to_storage(slide_matrix) else NULL,
     raw_data_table    = if (!is.null(raw_data)) favorites_table_to_storage(raw_data) else NULL
@@ -268,6 +273,8 @@ export_history_redownload <- function(entry, zip_path, templates_dir = NULL, ppt
     slide_order       = tc_or(entry$slide_order, "auto"),
     chart_id          = entry$id,
     favorite_download_id = entry$favorite_download_id,
+    dictionary_format = isTRUE(entry$dictionary_format),
+    dictionary_crosswalk = if (length(entry$dictionary_crosswalk) > 0) unlist(entry$dictionary_crosswalk) else NULL,
     asset_path        = export_history_asset_path(entry$id),
     asset_label       = tc_or(entry$label, "chart")
   )
@@ -373,7 +380,9 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
       favorite_download_id = favorite_download_id,
       module_id         = tc_or(entry$module_id, ""),
       filename_prefix   = live_spec$filename_prefix,
-      templates_dir     = templates_dir
+      templates_dir     = templates_dir,
+      dictionary_format = live_spec$dictionary_format,
+      dictionary_crosswalk = live_spec$dictionary_crosswalk
     )
     history_entry$id <- export_history_new_id()
     if (!is.null(created_at)) history_entry$created_at <- created_at
@@ -389,7 +398,9 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
       selections = live_spec$selections, chart_id = download_id,
       favorite_download_id = favorite_download_id,
       source_output = live_spec$source_output, source_sheet = live_spec$source_sheet,
-      source_mtime = live_spec$source_mtime
+      source_mtime = live_spec$source_mtime,
+      dictionary_format = live_spec$dictionary_format,
+      dictionary_crosswalk = live_spec$dictionary_crosswalk
     )
     label <- tc_or(
       Find(function(x) !is.null(x) && nzchar(x),
@@ -444,7 +455,9 @@ export_history_prepare_regenerate_spec <- function(entry, session, favorite_down
     selections = new_entry$selections, chart_id = new_entry$id,
     favorite_download_id = favorite_download_id,
     source_output = tc_or(new_entry$source_output, ""), source_sheet = tc_or(new_entry$source_sheet, ""),
-    source_mtime = tc_or(new_entry$source_mtime, "")
+    source_mtime = tc_or(new_entry$source_mtime, ""),
+    dictionary_format = isTRUE(new_entry$dictionary_format),
+    dictionary_crosswalk = if (length(new_entry$dictionary_crosswalk) > 0) unlist(new_entry$dictionary_crosswalk) else NULL
   )
   slide_matrix <- if (!is.null(new_entry$slide_matrix_table)) {
     favorites_table_as_df(new_entry$slide_matrix_table)
@@ -617,26 +630,32 @@ export_history_regenerate_excel_one <- function(entry, session, templates_dir = 
       source_mtime      = live_spec$source_mtime,
       module_id         = tc_or(entry$module_id, ""),
       filename_prefix   = live_spec$filename_prefix,
-      templates_dir     = templates_dir
+      templates_dir     = templates_dir,
+      dictionary_format = live_spec$dictionary_format,
+      dictionary_crosswalk = live_spec$dictionary_crosswalk
     )
     history_entry$id <- export_history_new_id()
     download_id <- export_history_add(history_entry)
 
+    # The exact matrix embedded in the slide chart (see the note in
+    # chart_downloads.R's output$thinkcell) -- so the regenerated Excel has
+    # the same orientation as every other think-cell table download.
     ordered_matrix <- tc_resolve_slide_matrix(
       live_spec$tc_data, live_spec$chart_type, live_spec$slide_matrix, live_spec$slide_order
     )
-    tc_data <- tc_reorder_by_categories(live_spec$tc_data, names(ordered_matrix)[-1])
 
     log_line <- tc_build_datasheet_log(
       dashboard_title = live_spec$dashboard_title, tab_label = live_spec$tab_label,
       subtab_label = live_spec$subtab_label, chart_type = live_spec$chart_type,
       selections = live_spec$selections, chart_id = download_id,
       source_output = live_spec$source_output, source_sheet = live_spec$source_sheet,
-      source_mtime = live_spec$source_mtime
+      source_mtime = live_spec$source_mtime,
+      dictionary_format = live_spec$dictionary_format,
+      dictionary_crosswalk = live_spec$dictionary_crosswalk
     )
     return(list(
       live = TRUE,
-      data = tc_stamp_tc_matrix_corner(tc_data, log_line),
+      data = tc_stamp_tc_matrix_corner(ordered_matrix, log_line),
       filename_prefix = tc_or(live_spec$filename_prefix, "chart")
     ))
   }
@@ -657,18 +676,19 @@ export_history_regenerate_excel_one <- function(entry, session, templates_dir = 
     NULL
   }
   ordered_matrix <- tc_resolve_slide_matrix(tc_data, new_entry$chart_type, slide_matrix, tc_or(new_entry$slide_order, "auto"))
-  tc_data <- tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
 
   log_line <- tc_build_datasheet_log(
     dashboard_title = tc_or(new_entry$dashboard_title, ""), tab_label = tc_or(new_entry$tab_label, ""),
     subtab_label = tc_or(new_entry$subtab_label, ""), chart_type = new_entry$chart_type,
     selections = new_entry$selections, chart_id = new_entry$id,
     source_output = tc_or(new_entry$source_output, ""), source_sheet = tc_or(new_entry$source_sheet, ""),
-    source_mtime = tc_or(new_entry$source_mtime, "")
+    source_mtime = tc_or(new_entry$source_mtime, ""),
+    dictionary_format = isTRUE(new_entry$dictionary_format),
+    dictionary_crosswalk = if (length(new_entry$dictionary_crosswalk) > 0) unlist(new_entry$dictionary_crosswalk) else NULL
   )
   list(
     live = FALSE,
-    data = tc_stamp_tc_matrix_corner(tc_data, log_line),
+    data = tc_stamp_tc_matrix_corner(ordered_matrix, log_line),
     filename_prefix = tc_or(new_entry$filename_prefix, "chart")
   )
 }
@@ -873,6 +893,7 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
           shiny::tags$div(
             shiny::tags$strong(tc_or(e$label, "(untitled)")),
             shiny::tags$code(style = "font-size:11px; margin-left:8px; color:#6B7280;", tc_or(e$id, "")),
+            tc_dictionary_badge_ui(e$dictionary_format),
             shiny::tags$div(
               style = "font-size:12px; color:#6B7280;",
               tc_history_entry_subtitle(e)
@@ -890,14 +911,7 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
               shiny::tags$span(style = "color:#9CA3AF;", "Template: "),
               e$template_name
             ),
-            {
-              options_line <- favorites_selections_inline(e$selections)
-              if (nzchar(options_line)) shiny::tags$div(
-                style = "font-size:11px; color:#6B7280; margin-top:2px;",
-                shiny::tags$span(style = "color:#9CA3AF;", "Options: "),
-                options_line
-              )
-            }
+            tc_selections_details_ui(e$selections, crosswalk = e$dictionary_crosswalk)
           )
         )
       )

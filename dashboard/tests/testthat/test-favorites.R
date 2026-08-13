@@ -202,6 +202,15 @@ test_that("favorites_capture stores module_id when supplied", {
   expect_equal(entry$module_id, "revenue_chart_dl")
 })
 
+test_that("favorites_capture records the dictionary_format flag (defaulting to FALSE)", {
+  on  <- favorites_capture(chart_type = "stacked_bar", dictionary_format = TRUE)
+  off <- favorites_capture(chart_type = "stacked_bar", dictionary_format = FALSE)
+  default <- favorites_capture(chart_type = "stacked_bar")
+  expect_true(on$dictionary_format)
+  expect_false(off$dictionary_format)
+  expect_false(default$dictionary_format)
+})
+
 test_that("favorites_selections_inline renders a compact, truncated one-liner", {
   expect_equal(favorites_selections_inline(NULL), "")
   expect_equal(favorites_selections_inline(list()), "")
@@ -342,7 +351,7 @@ test_that("favorites_build_raw_xlsx/thinkcell_xlsx include only live favorites a
   expect_equal(skipped_tc, "Stale Chart")
 })
 
-test_that("favorites_build_raw_xlsx/thinkcell_xlsx are not logged to Export History", {
+test_that("favorites_build_raw_xlsx is never logged to Export History", {
   skip_if_not_installed("readxl")
   with_history_dir({
     session <- fake_session()
@@ -350,8 +359,25 @@ test_that("favorites_build_raw_xlsx/thinkcell_xlsx are not logged to Export Hist
     entries <- list(list(label = "Revenue", module_id = "revenue_dl"))
 
     favorites_build_raw_xlsx(tempfile(fileext = ".xlsx"), entries = entries, session = session)
-    favorites_build_thinkcell_xlsx(tempfile(fileext = ".xlsx"), entries = entries, session = session)
     expect_length(export_history_list(), 0)
+  })
+})
+
+test_that("favorites_build_thinkcell_xlsx stamps the A1 corner-cell log and logs to Export History (identical to the slides-zip table)", {
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    session <- fake_session()
+    register_live_chart(session, "revenue_dl")
+    entries <- list(list(label = "Revenue", module_id = "revenue_dl"))
+
+    tc_path <- tempfile(fileext = ".xlsx")
+    favorites_build_thinkcell_xlsx(tc_path, entries = entries, session = session, templates_dir = templates_dir)
+
+    expect_equal(readxl::excel_sheets(tc_path), "Revenue")
+    header <- names(readxl::read_excel(tc_path, sheet = "Revenue", n_max = 0))
+    expect_true(grepl("^LOG \\|", header[[1]]))
+    expect_length(export_history_list(), 1)
   })
 })
 

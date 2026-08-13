@@ -963,11 +963,17 @@ tc_selection_kv_pairs <- function(selections) {
 #'   download -- a value with no dictionary entry (or whose "Format from
 #'   dictionary" checkbox is off) never contributes a pair, keeping this
 #'   compact rather than listing every value in the chart.
+#' @param dictionary_format Optional logical -- whether the "Format from
+#'   dictionary" checkbox was on for this download. When `TRUE`, an explicit
+#'   `dictionary_format=on` segment is emitted, so "on but nothing was
+#'   actually relabeled" (empty `dictionary_crosswalk`) is still
+#'   distinguishable from "off". `NULL`/`FALSE` emits nothing.
 tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
                                    chart_type, selections, chart_id = NULL,
                                    favorite_download_id = NULL,
                                    source_output = NULL, source_sheet = NULL,
-                                   source_mtime = NULL, dictionary_crosswalk = NULL) {
+                                   source_mtime = NULL, dictionary_crosswalk = NULL,
+                                   dictionary_format = NULL) {
   parts <- c(sprintf("timestamp=%s", tc_now()))
   if (!is.null(chart_id) && nzchar(trimws(tc_or(chart_id, "")))) {
     parts <- c(parts, sprintf("download_id=%s", chart_id))
@@ -994,6 +1000,9 @@ tc_build_datasheet_log <- function(dashboard_title, tab_label, subtab_label,
   pairs <- tc_selection_kv_pairs(selections)
   if (length(pairs) > 0) {
     parts <- c(parts, vapply(pairs, function(p) sprintf("%s=%s", p$name, p$value), character(1)))
+  }
+  if (isTRUE(dictionary_format)) {
+    parts <- c(parts, "dictionary_format=on")
   }
   if (!is.null(dictionary_crosswalk) && length(dictionary_crosswalk) > 0) {
     crosswalk <- paste(
@@ -1067,6 +1076,8 @@ tc_build_slide_zip <- function(zip_path,
                                source_output    = NULL,
                                source_sheet     = NULL,
                                source_mtime     = NULL,
+                               dictionary_crosswalk = NULL,
+                               dictionary_format = NULL,
                                asset_path       = NULL,
                                asset_label      = NULL) {
 
@@ -1109,16 +1120,25 @@ tc_build_slide_zip <- function(zip_path,
     favorite_download_id = favorite_download_id,
     source_output   = source_output,
     source_sheet    = source_sheet,
-    source_mtime    = source_mtime
+    source_mtime    = source_mtime,
+    dictionary_crosswalk = dictionary_crosswalk,
+    dictionary_format = dictionary_format
   )
 
-  # ---- (2) underlying table (identical to the think-cell table download,
-  # but with its own category axis reordered to match the slide's -- see
-  # tc_reorder_by_categories() -- so a PM opening this workbook alongside the
-  # rendered slide sees the same order, not just the .pptx chart itself) ----
+  # ---- (2) underlying table -- the SAME matrix embedded in the slide's own
+  # think-cell chart (categories across the header), so a PM can open this
+  # workbook and paste it straight into the chart datasheet without
+  # re-pivoting. For a non-faceted chart that's exactly `slide_matrix`; a
+  # faceted chart keeps all its facets (the slide embeds only the first),
+  # reordered to the first facet's category order. ----
+  table_matrix <- if (is_faceted) {
+    tc_reorder_by_categories(tc_data, names(slide_matrix)[-1])
+  } else {
+    slide_matrix
+  }
   table_path <- file.path(work, paste0(filename_prefix, "_table.xlsx"))
   write_table_fun(
-    tc_stamp_tc_matrix_corner(tc_reorder_by_categories(tc_data, names(slide_matrix)[-1]), datasheet_log),
+    tc_stamp_tc_matrix_corner(table_matrix, datasheet_log),
     table_path
   )
 

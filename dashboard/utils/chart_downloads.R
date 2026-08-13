@@ -570,39 +570,14 @@ chart_data_downloads_server <- function(
         paste0(filename_prefix, "_raw_", Sys.Date(), ".xlsx")
       },
       content = function(file) {
-        # Same matrix shape as "Download data (think-cell)" -- opening the
-        # two side by side used to show a mismatch (e.g. a time column as
-        # its own row of values here, but as the header row there) since
-        # this button used to write data() completely unreshaped. Only the
-        # corner-cell provenance stamp still differs: think-cell's own
-        # button carries one (utils/slide_download.R's
-        # tc_build_datasheet_log()), this one intentionally doesn't, since
-        # this download isn't logged to Export History either.
-        resolved_chart_type <- resolve_tc_chart_type(chart_type)
-        if (!is_tc_chart_type_supported(resolved_chart_type)) {
-          write_tc_xlsx(data(), file)
-          return(invisible(NULL))
-        }
-
-        tc_data <- format_tc_data(
-          df = data(),
-          chart_type = resolved_chart_type,
-          category_col = category_col,
-          series_col = series_col,
-          value_col = value_col,
-          agg_fun = agg_fun,
-          category_order = resolved_category_order(),
-          series_order = resolved_series_order(),
-          waterfall_end_col = waterfall_end_col,
-          waterfall_subtotal_cols = waterfall_subtotal_cols,
-          facet_col = facet_col
-        )
-        ordered_matrix <- tc_resolve_slide_matrix(
-          if (is_tc_workbook_list(tc_data)) tc_data[[1]] else tc_data,
-          resolved_chart_type, NULL, tc_or(input$slide_order, "auto")
-        )
-        tc_data <- tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
-        write_tc_xlsx(tc_data, file)
+        # The exact filtered data frame behind the plot, written with NO
+        # think-cell reshaping -- the raw, long-format companion to the
+        # pivoted "Download data (think-cell)" table. "Raw" means unpivoted,
+        # not un-dictionaried: data() is the shadowed, dictionary-aware
+        # reactive, so the "Format from dictionary" checkbox still relabels
+        # its category/series values, same as every other download here. No
+        # corner-cell provenance stamp by convention -- this is just the data.
+        write_tc_xlsx(data(), file)
       }
     )
 
@@ -637,19 +612,26 @@ chart_data_downloads_server <- function(
             facet_col = facet_col
           )
 
-          # Apply the "Category order" dropdown here too -- same
-          # tc_resolve_slide_matrix()/tc_reorder_by_categories() pattern
-          # tc_build_slide_zip() and export_history_regenerate_excel_one()
-          # already use, so this plain table download reads in the same
-          # order as the slide/table it's meant to match, not just whatever
-          # order format_tc_data() happened to produce. A faceted tc_data is
-          # a per-facet named list; derive the reference order from the
-          # first facet only, same scope tc_build_slide_zip() already has.
+          # Write the exact matrix embedded in the slide's think-cell chart
+          # (categories across the header, series in rows -- the template
+          # orientation from tc_resolve_slide_matrix()), NOT format_tc_data()'s
+          # own `tc_data` orientation, which for bar-family charts is the
+          # transpose. This is what lets a PM paste the downloaded table
+          # straight into the chart's datasheet without re-pivoting first.
+          # The "Category order" dropdown is honored via slide_order. A
+          # faceted tc_data is a per-facet named list -- the slide embeds only
+          # the first facet, so keep all facets in tc_data orientation there,
+          # reordered to the first facet's category order (unchanged behavior
+          # for the faceted case).
           ordered_matrix <- tc_resolve_slide_matrix(
             if (is_tc_workbook_list(tc_data)) tc_data[[1]] else tc_data,
             resolved_chart_type, NULL, tc_or(input$slide_order, "auto")
           )
-          tc_data <- tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
+          tc_table <- if (is_tc_workbook_list(tc_data)) {
+            tc_reorder_by_categories(tc_data, names(ordered_matrix)[-1])
+          } else {
+            ordered_matrix
+          }
 
           # Same corner-cell provenance idea as the slide/favorites downloads
           # (see tc_build_ppttc_slide_block()), just stamped onto the plain
@@ -665,9 +647,10 @@ chart_data_downloads_server <- function(
             source_output   = resolve_opt(source_output),
             source_sheet    = resolve_opt(source_sheet),
             source_mtime    = resolve_opt(source_mtime),
-            dictionary_crosswalk = dictionary_crosswalk()
+            dictionary_crosswalk = dictionary_crosswalk(),
+            dictionary_format = isTRUE(input$dictionary_format)
           )
-          write_tc_xlsx(tc_stamp_tc_matrix_corner(tc_data, log_line), file)
+          write_tc_xlsx(tc_stamp_tc_matrix_corner(tc_table, log_line), file)
         }
       )
     }
@@ -776,7 +759,13 @@ chart_data_downloads_server <- function(
           source_output = resolve_opt(source_output),
           source_sheet = resolve_opt(source_sheet),
           source_mtime = resolve_opt(source_mtime),
-          filename_prefix = filename_prefix
+          filename_prefix = filename_prefix,
+          # Captured here (not recomputed downstream) so a bulk favorites /
+          # export-history rebuild logs the same dictionary provenance the
+          # single-chart download does -- see tc_build_datasheet_log()'s
+          # dictionary_format/dictionary_crosswalk params.
+          dictionary_format = isTRUE(input$dictionary_format),
+          dictionary_crosswalk = dictionary_crosswalk()
         )
       }
 
@@ -838,7 +827,9 @@ chart_data_downloads_server <- function(
             source_mtime      = spec$source_mtime,
             favorite_download_id = favorite_download_id,
             module_id         = id,
-            filename_prefix   = spec$filename_prefix
+            filename_prefix   = spec$filename_prefix,
+            dictionary_format = spec$dictionary_format,
+            dictionary_crosswalk = spec$dictionary_crosswalk
           )
           # chart_id_override lets a caller mint this download's id *before*
           # calling build_export_now() -- needed so the button's own
@@ -873,6 +864,8 @@ chart_data_downloads_server <- function(
           slide_order       = spec$slide_order,
           chart_id          = chart_id,
           favorite_download_id = favorite_download_id,
+          dictionary_format = spec$dictionary_format,
+          dictionary_crosswalk = spec$dictionary_crosswalk,
           asset_path        = asset_path,
           asset_label       = tc_or(spec$figure_title, tc_or(spec$slide_title, spec$filename_prefix))
         )
@@ -935,7 +928,8 @@ chart_data_downloads_server <- function(
           subtab_label      = tc_ctx_active_subtab(),
           selections        = tc_ctx_selections(module_id = id),
           module_id         = id,
-          filename_prefix   = filename_prefix
+          filename_prefix   = filename_prefix,
+          dictionary_format = isTRUE(input$dictionary_format)
         )
         favorites_add(entry)
         favorite_status_rv(sprintf("Saved '%s' to favorites.", entry$label))

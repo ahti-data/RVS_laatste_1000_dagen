@@ -182,6 +182,10 @@ favorites_table_to_storage <- function(df) {
 #'   `label` below.
 #' @param label Optional short display label; defaults to the chart's own
 #'   title (`figure_title`/`slide_title`), then the sub-tab, then the prefix.
+#' @param dictionary_format Optional logical -- the source chart's "Format
+#'   from dictionary" checkbox state when this favorite was starred, shown as
+#'   a badge in the Favorites list. Reflects star-time state; a live rebuild
+#'   at download time uses the chart's *current* checkbox, which may differ.
 #' @return A list ready for [favorites_add()].
 favorites_capture <- function(
     chart_type,
@@ -189,7 +193,8 @@ favorites_capture <- function(
     dashboard_title = "", tab_label = "", subtab_label = "",
     selections = NULL,
     module_id = NULL,
-    filename_prefix = "chart", label = NULL
+    filename_prefix = "chart", label = NULL,
+    dictionary_format = NULL
 ) {
   # tc_or() only falls back on NULL, not on "" — and tc_ctx_active_subtab()
   # legitimately returns "" whenever the app hasn't registered a nav/subtab
@@ -210,7 +215,8 @@ favorites_capture <- function(
     subtab_label    = subtab_label,
     chart_type      = chart_type,
     selections      = selections,
-    module_id       = module_id
+    module_id       = module_id,
+    dictionary_format = isTRUE(dictionary_format)
   )
 }
 
@@ -280,24 +286,18 @@ tc_build_deck_from_specs <- function(specs, zip_path, ppttc_exe = NULL) {
   }, add = TRUE)
 
   if (length(specs) > 0) {
+    # One stamped combined think-cell workbook -- the single source of truth
+    # shared with the standalone bulk "Download Excel data (think-cell)"
+    # button (see tc_build_thinkcell_xlsx_from_specs()), so the two are
+    # identical.
+    tc_build_thinkcell_xlsx_from_specs(specs, file.path(work, "favorites_thinkcell_tables.xlsx"))
+
+    # raw_table is optional per spec; specs without one simply don't
+    # contribute a sheet here rather than failing the whole export.
     as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
     labels <- sanitize_excel_sheet_names(
       vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
     )
-
-    # Stamp each sheet with its own chart's provenance log (see
-    # tc_stamp_tc_matrix_corner()) -- same corner-cell record the single-chart
-    # "Download Excel data (think-cell)" button and the slide's own datasheet
-    # already carry, so a PM who only has this combined workbook can still
-    # trace any sheet back to its source.
-    sheets <- stats::setNames(
-      lapply(specs, function(s) tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)),
-      labels
-    )
-    write_tc_xlsx(sheets, file.path(work, "favorites_thinkcell_tables.xlsx"))
-
-    # raw_table is optional per spec; specs without one simply don't
-    # contribute a sheet here rather than failing the whole export.
     has_raw <- vapply(specs, function(s) !is.null(s$raw_table), logical(1))
     if (any(has_raw)) {
       raw_sheets <- stats::setNames(lapply(specs[has_raw], function(s) as_df(s$raw_table)), labels[has_raw])
@@ -345,19 +345,16 @@ tc_write_deck_files <- function(specs, work, ppttc_exe = NULL, include_tables = 
   as_df <- function(x) as.data.frame(x, stringsAsFactors = FALSE, check.names = FALSE)
 
   if (include_tables) {
+    # Same stamped combined think-cell workbook the standalone bulk Excel
+    # button produces (see tc_build_thinkcell_xlsx_from_specs()), so the two
+    # are identical; only the think-cell-shaped table gets the corner-cell
+    # stamp -- raw_table's column 1 is a real data column, not the blank
+    # placeholder think-cell leaves.
+    tc_build_thinkcell_xlsx_from_specs(specs, file.path(work, "favorites_thinkcell_tables.xlsx"))
+
     labels <- sanitize_excel_sheet_names(
       vapply(specs, function(s) tc_or(s$label, "chart"), character(1))
     )
-    # Same corner-cell provenance stamp the single-chart "Download Excel
-    # data (think-cell)" button carries (see tc_stamp_tc_matrix_corner()) --
-    # only the think-cell-shaped table gets it; raw_table's column 1 is a
-    # real data column, not the blank placeholder think-cell leaves.
-    sheets <- stats::setNames(
-      lapply(specs, function(s) tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)),
-      labels
-    )
-    write_tc_xlsx(sheets, file.path(work, "favorites_thinkcell_tables.xlsx"))
-
     has_raw <- vapply(specs, function(s) !is.null(s$raw_table), logical(1))
     if (any(has_raw)) {
       raw_sheets <- stats::setNames(lapply(specs[has_raw], function(s) as_df(s$raw_table)), labels[has_raw])
@@ -462,13 +459,18 @@ tc_build_slide_deck_zip <- function(specs, zip_path, ppttc_exe = NULL) {
   invisible(zip_path_abs)
 }
 
-#' Write just the think-cell-shaped combined workbook for a list of specs --
-#' one sheet per spec -- with no deck, no overview, no zip wrapper (a bare
-#' `.xlsx`). Used by Favorites' "Download Excel data (think-cell formatted)"
-#' bulk button -- unlike "Download slides", this one isn't logged to Export
-#' History, matching the single-chart "Download data (think-cell)" button's
-#' own convention (only a *slide* download is audited).
-#' @param specs List of `list(label, tc_table)`.
+#' Write the think-cell-shaped combined workbook for a list of specs -- one
+#' sheet per spec, each stamped with its own `datasheet_log` in the A1 corner
+#' cell (see [tc_stamp_tc_matrix_corner()]) -- with no deck, no overview, no
+#' zip wrapper (a bare `.xlsx`). This is the single source of truth for the
+#' combined think-cell workbook: the standalone bulk "Download Excel data
+#' (think-cell formatted)" button, the same-named file inside the "Download
+#' slides" ZIP ([tc_build_deck_from_specs()]/[tc_write_deck_files()]), and any
+#' other combined think-cell table all go through here, so they're identical
+#' by construction (same sheets, same corner-cell logs).
+#' @param specs List of `list(label, tc_table, datasheet_log = NULL)`. A spec
+#'   with no `datasheet_log` is written unstamped (tc_stamp_tc_matrix_corner()
+#'   no-ops on an empty log).
 #' @param path Output `.xlsx` path.
 #' @return `path`, invisibly.
 tc_build_thinkcell_xlsx_from_specs <- function(specs, path) {
@@ -478,7 +480,10 @@ tc_build_thinkcell_xlsx_from_specs <- function(specs, path) {
     return(invisible(path))
   }
   labels <- sanitize_excel_sheet_names(vapply(specs, function(s) tc_or(s$label, "chart"), character(1)))
-  sheets <- stats::setNames(lapply(specs, function(s) as_df(s$tc_table)), labels)
+  sheets <- stats::setNames(
+    lapply(specs, function(s) tc_stamp_tc_matrix_corner(as_df(s$tc_table), s$datasheet_log)),
+    labels
+  )
   write_tc_xlsx(sheets, path)
   invisible(path)
 }
@@ -588,7 +593,9 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
       favorite_download_id = favorite_download_id,
       module_id         = tc_or(entry$module_id, ""),
       filename_prefix   = live_spec$filename_prefix,
-      templates_dir     = templates_dir
+      templates_dir     = templates_dir,
+      dictionary_format = live_spec$dictionary_format,
+      dictionary_crosswalk = live_spec$dictionary_crosswalk
     )
     history_entry$id <- export_history_new_id()
     if (!is.null(batch_created_at)) history_entry$created_at <- batch_created_at
@@ -605,7 +612,9 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
     favorite_download_id = favorite_download_id,
     source_output   = tc_or(live_spec$source_output, ""),
     source_sheet    = tc_or(live_spec$source_sheet, ""),
-    source_mtime    = tc_or(live_spec$source_mtime, "")
+    source_mtime    = tc_or(live_spec$source_mtime, ""),
+    dictionary_format = live_spec$dictionary_format,
+    dictionary_crosswalk = live_spec$dictionary_crosswalk
   )
 
   # entry$label (the favorite's own display name, resolved once at star
@@ -729,21 +738,29 @@ favorites_build_slides_zip <- function(zip_path, entries = NULL, session, ppttc_
 
 #' Build the combined think-cell-shaped workbook (bare `.xlsx`, no zip) for
 #' every live favorite -- Favorites' "Download Excel data (think-cell
-#' formatted)" bulk button. Not logged to Export History (matches the
-#' single-chart "Download data (think-cell)" button's own convention -- only
-#' a *slide* download is audited) -- deliberately builds a much simpler spec
-#' than [favorites_build_specs_with_history()] since none of that function's
-#' template-resolution/history-logging work is needed just to write a table.
+#' formatted)" bulk button. Goes through the *same* spec path
+#' ([favorites_build_specs_with_history()]) the "Download slides" ZIP uses, so
+#' this standalone workbook is identical to the `favorites_thinkcell_tables.xlsx`
+#' bundled in that ZIP -- same sheets, same A1 corner-cell provenance log --
+#' and, like the slide download, each chart is logged to Export History. (The
+#' first batch built this from a lightweight, unstamped, unlogged path, which
+#' is why its workbook had no corner-cell log and created no history entry.)
 #' @param path Output `.xlsx` path (the `file` handed in by downloadHandler).
 #' @param entries Favorites to include; defaults to every saved favorite.
 #' @param session The Shiny session driving this download.
+#' @param templates_dir Optional templates directory override (mainly for tests).
+#' @param favorite_download_id_override Passed through to
+#'   [favorites_build_specs_with_history()] -- see its own doc comment.
 #' @return Character vector of skipped favorites' labels (invisibly).
-favorites_build_thinkcell_xlsx <- function(path, entries = NULL, session) {
-  entries <- tc_or(entries, favorites_list())
-  results <- lapply(entries, favorites_prepare_live_table, session = session)
-  is_skipped <- vapply(results, is.null, logical(1))
-  tc_build_thinkcell_xlsx_from_specs(Filter(Negate(is.null), results), path)
-  invisible(vapply(entries[is_skipped], function(e) tc_or(e$label, "favorite"), character(1)))
+favorites_build_thinkcell_xlsx <- function(path, entries = NULL, session,
+                                            templates_dir = NULL,
+                                            favorite_download_id_override = NULL) {
+  result <- favorites_build_specs_with_history(
+    entries, session, templates_dir,
+    favorite_download_id_override = favorite_download_id_override
+  )
+  tc_build_thinkcell_xlsx_from_specs(result$specs, path)
+  invisible(result$skipped)
 }
 
 #' Build the combined raw-data workbook (bare `.xlsx`, no zip) for every live
@@ -785,6 +802,77 @@ favorites_selections_inline <- function(selections, max_chars = 160) {
   out <- paste(parts, collapse = " · ")
   if (nchar(out) > max_chars) out <- paste0(substr(out, 1, max_chars - 1), "…")
   out
+}
+
+#' A small coloured "Dictionary: on/off" badge for a Favorites/Export History
+#' row, from a stored `dictionary_format` flag. `NULL`/absent renders nothing
+#' (older entries saved before the flag existed simply show no badge).
+#' @param dictionary_format Logical (or `NULL`).
+#' @param note Optional qualifier appended in parentheses (e.g. "at star time"
+#'   for a favorite, since a favorite rebuilds live at download time).
+tc_dictionary_badge_ui <- function(dictionary_format, note = NULL) {
+  if (is.null(dictionary_format) || length(dictionary_format) != 1 || is.na(dictionary_format)) {
+    return(NULL)
+  }
+  on <- isTRUE(dictionary_format)
+  label <- paste0("Dictionary: ", if (on) "on" else "off",
+                  if (!is.null(note) && nzchar(note)) paste0(" (", note, ")") else "")
+  shiny::tags$span(
+    style = paste0(
+      "display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; ",
+      "border-radius:8px; margin-left:6px; vertical-align:middle; ",
+      if (on) "background:#DCFCE7; color:#166534;" else "background:#F3F4F6; color:#6B7280;"
+    ),
+    label
+  )
+}
+
+#' Full, untruncated selection list for a Favorites/Export History row, as a
+#' native collapsible `<details>` block (same pattern the Dictionary tab
+#' uses) -- so every selected parameter is visible on demand without the
+#' truncation [favorites_selections_inline()] applies to the always-visible
+#' one-line summary. Optionally also lists a stored dictionary crosswalk
+#' (raw -> pretty relabels actually applied) inside the same block.
+#' @param selections Named list of option selections.
+#' @param crosswalk Optional named character vector / list of raw -> pretty
+#'   pairs (an export-history entry's stored `dictionary_crosswalk`).
+#' @return A `<details>` tag, or `NULL` when there's nothing to show.
+tc_selections_details_ui <- function(selections, crosswalk = NULL) {
+  rows <- list()
+  if (!is.null(selections) && length(selections) > 0) {
+    nm <- names(selections)
+    if (is.null(nm)) nm <- paste0("option_", seq_along(selections))
+    for (i in seq_along(selections)) {
+      v <- selections[[i]]
+      if (is.null(v) || length(v) == 0) next
+      v <- paste(as.character(v), collapse = ", ")
+      if (!nzchar(trimws(v))) next
+      rows[[length(rows) + 1]] <- shiny::tags$div(
+        style = "font-size:11px; color:#374151; padding:1px 0;",
+        shiny::tags$span(style = "color:#9CA3AF;", paste0(nm[[i]], ": ")), v
+      )
+    }
+  }
+  n_sel <- length(rows)
+
+  crosswalk <- if (length(crosswalk) > 0) unlist(crosswalk) else NULL
+  if (!is.null(crosswalk) && length(crosswalk) > 0) {
+    rows[[length(rows) + 1]] <- shiny::tags$div(
+      style = "font-size:11px; color:#374151; padding:4px 0 1px; border-top:1px solid #eee; margin-top:4px;",
+      shiny::tags$span(style = "color:#9CA3AF;", "Dictionary relabels: "),
+      paste(sprintf("%s → %s", names(crosswalk), unname(crosswalk)), collapse = " · ")
+    )
+  }
+
+  if (length(rows) == 0) return(NULL)
+  shiny::tags$details(
+    style = "margin-top:2px;",
+    shiny::tags$summary(
+      style = "cursor:pointer; font-size:11px; color:#6B7280; list-style:revert;",
+      sprintf("Show all selections (%d)", n_sel)
+    ),
+    shiny::tags$div(style = "padding:4px 0 2px 8px;", do.call(shiny::tagList, rows))
+  )
 }
 
 #' Same checkbox-layout fix as `utils/export_history.R`'s
@@ -878,7 +966,6 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
           Filter(nzchar, c(e$dashboard_title, e$tab_label, e$subtab_label)),
           collapse = " / "
         )
-        options_line <- favorites_selections_inline(e$selections)
         details <- shiny::tagList(
           if (nzchar(breadcrumb)) shiny::tags$div(
             style = "font-size:12px; color:#6B7280;", breadcrumb
@@ -890,11 +977,7 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
               if (nzchar(tc_or(e$created_at, ""))) paste0("Saved: ", e$created_at)
             )), collapse = " · ")
           ),
-          if (nzchar(options_line)) shiny::tags$div(
-            style = "font-size:11px; color:#6B7280; margin-top:2px;",
-            shiny::tags$span(style = "color:#9CA3AF;", "Options: "),
-            options_line
-          )
+          tc_selections_details_ui(e$selections)
         )
         shiny::tags$div(
           style = paste(
@@ -909,6 +992,9 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
             ),
             shiny::tags$div(
               shiny::tags$strong(tc_or(e$label, "(untitled)")),
+              # Reflects the checkbox when this favorite was starred; a live
+              # rebuild at download time uses the chart's current checkbox.
+              tc_dictionary_badge_ui(e$dictionary_format, note = "at star time"),
               details
             )
           ),

@@ -188,6 +188,21 @@ test_that("datasheet log includes a dictionary crosswalk only when supplied and 
   expect_false(grepl("dictionary=", without_crosswalk, fixed = TRUE))
 })
 
+test_that("datasheet log emits an explicit dictionary_format=on flag independently of the crosswalk", {
+  on_nochange <- tc_build_datasheet_log("D", "T", "S", "line", list(), dictionary_format = TRUE)
+  on_change   <- tc_build_datasheet_log("D", "T", "S", "line", list(),
+                                        dictionary_format = TRUE, dictionary_crosswalk = c(a = "A"))
+  off         <- tc_build_datasheet_log("D", "T", "S", "line", list(), dictionary_format = FALSE)
+  absent      <- tc_build_datasheet_log("D", "T", "S", "line", list())
+
+  expect_true(grepl("dictionary_format=on", on_nochange, fixed = TRUE))
+  expect_false(grepl("dictionary=", on_nochange, fixed = TRUE))
+  expect_true(grepl("dictionary_format=on", on_change, fixed = TRUE))
+  expect_true(grepl("dictionary=a->A", on_change, fixed = TRUE))
+  expect_false(grepl("dictionary_format=", off, fixed = TRUE))
+  expect_false(grepl("dictionary_format=", absent, fixed = TRUE))
+})
+
 test_that("datasheet log always stamps a generation timestamp", {
   line <- tc_build_datasheet_log("D", "T", "S", "line", list())
   expect_true(grepl("timestamp=\\d{4}-\\d{2}-\\d{2} \\d{2}:\\d{2}:\\d{2}", line))
