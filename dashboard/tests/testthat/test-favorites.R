@@ -381,6 +381,27 @@ test_that("favorites_build_thinkcell_xlsx stamps the A1 corner-cell log and logs
   })
 })
 
+test_that("favorites_build_thinkcell_xlsx embeds a pre-minted favorite_download_id in the corner-cell log", {
+  # The bulk think-cell download's filename() pre-mints the id and puts it in
+  # the file name, then passes it here as favorite_download_id_override so the
+  # workbook's own A1 log carries the SAME id -- file name and log agree.
+  skip_if_not(have_templates, "templates directory not available")
+  skip_if_not_installed("readxl")
+  with_history_dir({
+    session <- fake_session()
+    register_live_chart(session, "revenue_dl")
+    entries <- list(list(label = "Revenue", module_id = "revenue_dl"))
+
+    tc_path <- tempfile(fileext = ".xlsx")
+    favorites_build_thinkcell_xlsx(
+      tc_path, entries = entries, session = session, templates_dir = templates_dir,
+      favorite_download_id_override = "fav_dl_test_777"
+    )
+    header <- names(readxl::read_excel(tc_path, sheet = "Revenue", n_max = 0))
+    expect_true(grepl("favorite_download_id=fav_dl_test_777", header[[1]], fixed = TRUE))
+  })
+})
+
 test_that("favorites_build_raw_xlsx with no favorites still writes a valid workbook", {
   path <- tempfile(fileext = ".xlsx")
   favorites_build_raw_xlsx(path, entries = list(), session = fake_session())
@@ -817,6 +838,23 @@ test_that("clear_selection unchecks every selected favorite", {
 
       session$setInputs(clear_selection = 1)
       expect_length(selected_entries(), 0)
+    })
+  })
+})
+
+test_that("select_all checks every displayed favorite", {
+  with_favorites_path({
+    favorites_add(list(label = "One"))
+    favorites_add(list(label = "Two"))
+    favorites_add(list(label = "Three"))
+
+    shiny::testServer(favorites_panel_server, args = list(id = "test_fav"), {
+      entries_reactive()
+      session$flushReact()
+      expect_length(selected_entries(), 0)
+
+      session$setInputs(select_all = 1)
+      expect_length(selected_entries(), 3)
     })
   })
 })

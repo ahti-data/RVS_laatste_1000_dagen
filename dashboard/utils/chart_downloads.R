@@ -269,6 +269,7 @@ chart_data_downloads_ui <- function(
       "border:1px solid #E4E7EE; border-radius:8px; padding:12px 14px 14px;",
       "background:#FAFAFA; margin-bottom:10px;"
     ),
+    shiny::uiOutput(ns("source_updated_info")),
     dictionary_checkbox,
     do.call(shiny::tagList, buttons),
     slide_extra
@@ -565,9 +566,27 @@ chart_data_downloads_server <- function(
       )
     })
 
+    # Surfaces the same "source_updated=" date the export's A1 corner-cell log
+    # carries (see tc_build_datasheet_log()), so the underlying data's
+    # last-edited date is visible on the dashboard without downloading first.
+    # Renders nothing when this chart has no external source file wired
+    # (source_mtime unset) -- e.g. a chart built from inline/synthetic data.
+    output$source_updated_info <- shiny::renderUI({
+      mt <- resolve_opt(source_mtime)
+      if (!nzchar(mt)) return(NULL)
+      shiny::tags$div(
+        style = "font-size:11px; color:#6B7280; margin-bottom:8px;",
+        shiny::tags$span(style = "color:#9CA3AF;", "Source data updated: "),
+        mt
+      )
+    })
+
     output$raw <- shiny::downloadHandler(
       filename = function() {
-        paste0(filename_prefix, "_raw_", Sys.Date(), ".xlsx")
+        # A per-download id in the file name (mirrors output$thinkcell/slide) --
+        # purely a traceability tag here, since the raw download writes no
+        # corner-cell provenance to tie it back to.
+        paste0(filename_prefix, "_raw_", export_history_new_id(), "_", Sys.Date(), ".xlsx")
       },
       content = function(file) {
         # The exact filtered data frame behind the plot, written with NO
@@ -588,9 +607,18 @@ chart_data_downloads_server <- function(
     }
 
     if (register_thinkcell) {
+      # Minted in filename() (which Shiny resolves before content()) and reused
+      # in content() so the id in the file name also appears as download_id= in
+      # the workbook's own A1 corner-cell log -- file name and log carry the
+      # same id. It's a download tag, not an Export History key: the
+      # single-chart Excel download still isn't logged to history (only the
+      # slide export is).
+      pending_thinkcell_id <- shiny::reactiveVal(NULL)
       output$thinkcell <- shiny::downloadHandler(
         filename = function() {
-          paste0(filename_prefix, "_thinkcell_", Sys.Date(), ".xlsx")
+          id <- export_history_new_id()
+          pending_thinkcell_id(id)
+          paste0(filename_prefix, "_thinkcell_", id, "_", Sys.Date(), ".xlsx")
         },
         content = function(file) {
           resolved_chart_type <- resolve_tc_chart_type(chart_type)
@@ -636,14 +664,17 @@ chart_data_downloads_server <- function(
           # Same corner-cell provenance idea as the slide/favorites downloads
           # (see tc_build_ppttc_slide_block()), just stamped onto the plain
           # workbook's own header instead of a ppttc chart datasheet, since
-          # this export never goes through ppttc.exe. No chart_id: this
-          # download isn't logged to Export History.
+          # this export never goes through ppttc.exe. chart_id is this
+          # download's own file-name id (see pending_thinkcell_id above), so
+          # the log and file name agree -- it is NOT an Export History key
+          # (this Excel download isn't logged to history).
           log_line <- tc_build_datasheet_log(
             dashboard_title = tc_ctx_dashboard_title(),
             tab_label       = tc_ctx_active_tab(),
             subtab_label    = tc_ctx_active_subtab(),
             chart_type      = resolved_chart_type,
             selections      = tc_ctx_selections(module_id = id),
+            chart_id        = pending_thinkcell_id(),
             source_output   = resolve_opt(source_output),
             source_sheet    = resolve_opt(source_sheet),
             source_mtime    = resolve_opt(source_mtime),

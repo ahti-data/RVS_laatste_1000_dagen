@@ -662,12 +662,11 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
 #'   round (see `TC_CHART_CAPTURE_JS`'s `.tc-regenerate-go-btn` handler),
 #'   keyed by `module_id`.
 #' @param favorite_download_id_override Use this id for the whole batch
-#'   instead of minting a fresh one -- lets a caller pre-mint the id (see
-#'   `pending_slides_id`/`pending_selected_slides_id` in
-#'   `favorites_panel_server()`) *before* the click flow triggers the real
-#'   download, so a downloadHandler's `filename()` (resolved by Shiny before
-#'   its `content()` runs) can embed the exact same id used in the ZIP's own
-#'   provenance log.
+#'   instead of minting a fresh one -- lets a caller pre-mint the id (see the
+#'   `pending_selected_*_id` reactiveVals in `favorites_panel_server()`)
+#'   *before* the download runs, so a downloadHandler's `filename()` (resolved
+#'   by Shiny before its `content()` runs) can embed the exact same id used in
+#'   the workbook/ZIP's own provenance log.
 #' @return `list(specs, skipped)` -- `skipped` is a character vector of
 #'   labels for favorites whose chart wasn't live this session.
 favorites_build_specs_with_history <- function(entries = NULL, session, templates_dir = NULL, captures = list(),
@@ -901,14 +900,13 @@ favorites_panel_ui <- function(id, intro = NULL) {
       intro,
       paste0(
         "Shared across everyone using this dashboard — starring a chart bookmarks ",
-        "it here. Every download below rebuilds live from today's data; a favorite ",
-        "whose chart isn't currently open in your session is skipped."
+        "it here. Tick the favorites you want (or 'Select all'), then use the bar ",
+        "at the bottom to download or remove them. Every download rebuilds live ",
+        "from today's data; a favorite whose chart isn't currently open in your ",
+        "session is skipped."
       )
     )),
-    shiny::downloadButton(ns("download_all_raw"), "Download Excel data (raw)", class = "btn-default"),
-    shiny::downloadButton(ns("download_all_thinkcell"), "Download Excel data (think-cell formatted)", class = "btn-primary"),
-    shiny::uiOutput(ns("slides_download_control"), inline = TRUE),
-    shiny::actionButton(ns("remove_all"), "Remove all", class = "btn-default"),
+    shiny::uiOutput(ns("select_all_control")),
     shiny::tags$hr(),
     shiny::uiOutput(ns("list")),
     shiny::uiOutput(ns("selection_banner")),
@@ -1059,105 +1057,42 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
       )
     }
 
-    output$download_all_raw <- shiny::downloadHandler(
-      filename = function() paste0("favorites_raw_", Sys.Date(), ".xlsx"),
-      content = function(file) {
-        entries <- entries_reactive()
-        skipped <- favorites_build_raw_xlsx(file, entries = entries, session = session)
-        notify_skipped(skipped, length(entries))
+    # "Select all" ticks every currently-displayed favorite so the bottom
+    # selection banner -- the only download/remove surface now -- can act on
+    # the whole list at once (a per-tab filtered instance selects just its own
+    # entries). Mirrors input$clear_selection above, but sets TRUE.
+    shiny::observeEvent(input$select_all, {
+      for (e in entries_reactive()) {
+        selected[[e$id]] <- TRUE
+        shiny::updateCheckboxInput(session, paste0("sel_", e$id), value = TRUE)
       }
-    )
+    })
 
-    output$download_all_thinkcell <- shiny::downloadHandler(
-      filename = function() paste0("favorites_thinkcell_", Sys.Date(), ".xlsx"),
-      content = function(file) {
-        entries <- entries_reactive()
-        skipped <- favorites_build_thinkcell_xlsx(file, entries = entries, session = session)
-        notify_skipped(skipped, length(entries))
-      }
-    )
-
-    # "Download slides" needs a fresh screenshot of every live chart before
-    # the ZIP is built (so charts_overview.html isn't stale) -- same
-    # actionButton + hidden-downloadButton + TC_CHART_CAPTURE_JS pattern
-    # Export History's "Regenerate selected" already uses (see
-    # utils/export_history.R's selection_banner). Rendered via renderUI
-    # (rather than a static button in favorites_panel_ui()) so
-    # data-module-ids always reflects the current favorites list.
-    output$slides_download_control <- shiny::renderUI({
-      module_ids <- unique(Filter(nzchar, vapply(
-        entries_reactive(), function(e) tc_or(e$module_id, ""), character(1)
-      )))
-      shiny::tagList(
-        shiny::actionButton(
-          session$ns("download_all_slides_go"), "Download slides",
-          class = "btn-primary tc-regenerate-go-btn",
-          `data-module-ids` = jsonlite::toJSON(module_ids),
-          `data-capture-input-id` = session$ns("slides_capture")
-        ),
-        shiny::tags$span(
-          style = "display:none;",
-          shiny::downloadButton(session$ns("download_all_slides"), "")
-        )
+    # Rendered (rather than a static button in favorites_panel_ui()) so it can
+    # hide itself when there are no favorites and show the live count.
+    output$select_all_control <- shiny::renderUI({
+      entries <- entries_reactive()
+      if (length(entries) == 0) return(NULL)
+      shiny::actionButton(
+        session$ns("select_all"),
+        sprintf("Select all (%d)", length(entries)),
+        class = "btn-default"
       )
     })
 
-    pending_slides_capture <- shiny::reactiveVal(list())
-    # Minted here, not inside favorites_build_slides_zip(), for the same
-    # reason as chart_downloads.R's own pending_slide_id: Shiny resolves
-    # output$download_all_slides's filename() before running its content(),
-    # so the batch id has to exist before the click flow triggers the real
-    # download.
-    pending_slides_id <- shiny::reactiveVal(NULL)
-    shiny::observeEvent(input$slides_capture, {
-      pending_slides_capture(tc_or(input$slides_capture$captures, list()))
-      pending_slides_id(favorites_download_new_id())
-      session$sendCustomMessage("tc_trigger_download", list(download_id = session$ns("download_all_slides")))
-    }, ignoreInit = TRUE)
-
-    output$download_all_slides <- shiny::downloadHandler(
-      filename = function() {
-        id_part <- tc_or(pending_slides_id(), "")
-        paste0("favorites_slides_", if (nzchar(id_part)) paste0(id_part, "_") else "", Sys.Date(), ".zip")
-      },
-      content = function(file) {
-        entries <- entries_reactive()
-        skipped <- favorites_build_slides_zip(
-          file, entries = entries, session = session, captures = pending_slides_capture(),
-          favorite_download_id_override = pending_slides_id()
-        )
-        notify_skipped(skipped, length(entries))
-      }
-    )
-    # This download link lives inside a `display:none` wrapper (see
-    # output$slides_download_control above) -- see the matching note in
-    # utils/chart_downloads.R's own output$slide for why this is required.
-    shiny::outputOptions(output, "download_all_slides", suspendWhenHidden = FALSE)
-
-    shiny::observeEvent(input$remove_all, {
-      n <- length(entries_reactive())
-      scope <- if (is.null(tab_label_filter)) {
-        "every saved favorite for everyone using this dashboard"
-      } else {
-        sprintf("all %d favorite(s) starred from this tab", n)
-      }
-      shiny::showModal(shiny::modalDialog(
-        title = "Remove all favorites?",
-        sprintf("This deletes %s. This can't be undone.", scope),
-        footer = shiny::tagList(
-          shiny::modalButton("Cancel"),
-          shiny::actionButton(session$ns("remove_all_confirm"), "Remove all", class = "btn-danger")
-        )
-      ))
-    })
-
-    shiny::observeEvent(input$remove_all_confirm, {
-      favorites_remove_ids(vapply(entries_reactive(), function(e) e$id, character(1)))
-      shiny::removeModal()
-    })
-
+    # Mint the bulk id in filename() (which Shiny resolves before content())
+    # and stash it so content() embeds the *same* id in the workbook -- for
+    # think-cell that means the id also lands in each sheet's A1 corner-cell
+    # log + the Export History entries (via favorite_download_id_override), so
+    # the file name, the log, and history all agree. Raw is unlogged, so its
+    # id is just a file-name tag.
+    pending_selected_raw_id <- shiny::reactiveVal(NULL)
     output$download_selected_raw <- shiny::downloadHandler(
-      filename = function() paste0("favorites_selected_raw_", Sys.Date(), ".xlsx"),
+      filename = function() {
+        id <- favorites_download_new_id()
+        pending_selected_raw_id(id)
+        paste0("favorites_selected_raw_", id, "_", Sys.Date(), ".xlsx")
+      },
       content = function(file) {
         entries <- selected_entries()
         shiny::req(length(entries) > 0)
@@ -1166,12 +1101,20 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
       }
     )
 
+    pending_selected_thinkcell_id <- shiny::reactiveVal(NULL)
     output$download_selected_thinkcell <- shiny::downloadHandler(
-      filename = function() paste0("favorites_selected_thinkcell_", Sys.Date(), ".xlsx"),
+      filename = function() {
+        id <- favorites_download_new_id()
+        pending_selected_thinkcell_id(id)
+        paste0("favorites_selected_thinkcell_", id, "_", Sys.Date(), ".xlsx")
+      },
       content = function(file) {
         entries <- selected_entries()
         shiny::req(length(entries) > 0)
-        skipped <- favorites_build_thinkcell_xlsx(file, entries = entries, session = session)
+        skipped <- favorites_build_thinkcell_xlsx(
+          file, entries = entries, session = session,
+          favorite_download_id_override = pending_selected_thinkcell_id()
+        )
         notify_skipped(skipped, length(entries))
       }
     )
@@ -1202,7 +1145,10 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
         notify_skipped(skipped, length(entries))
       }
     )
-    # Same reasoning as output$download_all_slides's own outputOptions() call.
+    # This download link lives inside a `display:none` wrapper (see the
+    # selection banner below) -- see the matching note in
+    # utils/chart_downloads.R's own output$slide for why suspendWhenHidden
+    # must be FALSE.
     shiny::outputOptions(output, "download_selected_slides", suspendWhenHidden = FALSE)
 
     shiny::observeEvent(input$remove_selected, {

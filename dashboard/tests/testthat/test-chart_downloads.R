@@ -355,3 +355,60 @@ test_that("the think-cell download's corner cell includes the dictionary crosswa
     })
   })
 })
+
+test_that("the single-chart think-cell download's file-name id matches the download_id in its corner-cell log", {
+  skip_if_not_installed("readxl")
+  with_dictionary_path({
+    shiny::testServer(chart_data_downloads_server, args = list(
+      id = "test_chart",
+      data = shiny::reactive(sample_data()),
+      chart_type = "stacked_bar",
+      category_col = "quarter",
+      series_col = "product",
+      value_col = "revenue",
+      agg_fun = NULL
+    ), {
+      # filename() (run here, before content()) mints the id and stashes it in
+      # pending_thinkcell_id(); content() then stamps that SAME id into the
+      # workbook's A1 log -- so the id in the file name and the id in the log
+      # always agree.
+      p <- output$thinkcell
+      id <- pending_thinkcell_id()
+      expect_true(nzchar(id))
+      header <- names(readxl::read_excel(p, n_max = 0))
+      expect_true(grepl(paste0("download_id=", id), header[[1]], fixed = TRUE))
+    })
+  })
+})
+
+test_that("the download panel shows a 'Source data updated' line from source_mtime, and nothing when it is unset", {
+  shiny::testServer(chart_data_downloads_server, args = list(
+    id = "test_chart",
+    data = shiny::reactive(sample_data()),
+    chart_type = "stacked_bar",
+    category_col = "quarter",
+    series_col = "product",
+    value_col = "revenue",
+    agg_fun = NULL,
+    source_mtime = "2026-08-14 09:30:00"
+  ), {
+    html <- as.character(output$source_updated_info)
+    expect_true(any(grepl("Source data updated", html)))
+    expect_true(any(grepl("2026-08-14 09:30:00", html, fixed = TRUE)))
+  })
+
+  # No source_mtime wired (e.g. a chart from inline/synthetic data): the line
+  # renders nothing at all.
+  shiny::testServer(chart_data_downloads_server, args = list(
+    id = "test_chart",
+    data = shiny::reactive(sample_data()),
+    chart_type = "stacked_bar",
+    category_col = "quarter",
+    series_col = "product",
+    value_col = "revenue",
+    agg_fun = NULL
+  ), {
+    html <- as.character(output$source_updated_info)
+    expect_false(any(grepl("Source data updated", html)))
+  })
+})
