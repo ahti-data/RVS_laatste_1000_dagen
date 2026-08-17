@@ -186,6 +186,13 @@ favorites_table_to_storage <- function(df) {
 #'   from dictionary" checkbox state when this favorite was starred, shown as
 #'   a badge in the Favorites list. Reflects star-time state; a live rebuild
 #'   at download time uses the chart's *current* checkbox, which may differ.
+#' @param template_override Optional slide template chosen for this chart when
+#'   starred (a bare template file name, or `""`/`NULL` for auto-detect).
+#'   Unlike everything else here, this is a persisted user *preference*, not
+#'   display-only metadata: a live rebuild at download time applies it (see
+#'   [favorites_prepare_live_spec()]) so the favorite always uses the template
+#'   the user picked, instead of the live picker's default (which resets to
+#'   auto whenever the chart is remounted or opened in a fresh session).
 #' @return A list ready for [favorites_add()].
 favorites_capture <- function(
     chart_type,
@@ -194,7 +201,8 @@ favorites_capture <- function(
     selections = NULL,
     module_id = NULL,
     filename_prefix = "chart", label = NULL,
-    dictionary_format = NULL
+    dictionary_format = NULL,
+    template_override = NULL
 ) {
   # tc_or() only falls back on NULL, not on "" — and tc_ctx_active_subtab()
   # legitimately returns "" whenever the app hasn't registered a nav/subtab
@@ -216,7 +224,8 @@ favorites_capture <- function(
     chart_type      = chart_type,
     selections      = selections,
     module_id       = module_id,
-    dictionary_format = isTRUE(dictionary_format)
+    dictionary_format = isTRUE(dictionary_format),
+    template_override = if (is.null(template_override)) "" else template_override
   )
 }
 
@@ -567,9 +576,20 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
   live_spec <- favorites_live_spec_or_null(entry, session)
   if (is.null(live_spec)) return(NULL)
 
+  # The favorite remembers the slide template chosen when it was starred (a
+  # user preference tied to the bookmark, not live data), so it survives the
+  # chart being remounted or opened in another session -- both of which reset
+  # the live picker back to auto. Favorites saved before this was persisted
+  # have no stored field; fall back to the live chart's current choice there.
+  effective_override <- if (!is.null(entry$template_override)) {
+    entry$template_override
+  } else {
+    tc_or(live_spec$template_override, "")
+  }
+
   tpl_path <- tc_template_for_chart_type(
     live_spec$chart_type, templates_dir = templates_dir,
-    override = tc_or(live_spec$template_override, "")
+    override = effective_override
   )
 
   download_id <- NA_character_
@@ -581,7 +601,7 @@ favorites_prepare_live_spec <- function(entry, session, favorite_download_id = N
       raw_data          = live_spec$raw_data,
       slide_title       = live_spec$slide_title,
       figure_title      = live_spec$figure_title,
-      template_override = live_spec$template_override,
+      template_override = effective_override,
       slide_order       = live_spec$slide_order,
       dashboard_title   = live_spec$dashboard_title,
       tab_label         = live_spec$tab_label,

@@ -402,6 +402,43 @@ test_that("favorites_build_thinkcell_xlsx embeds a pre-minted favorite_download_
   })
 })
 
+test_that("favorites_capture persists the chosen slide template (manual pick and explicit auto)", {
+  e_manual <- favorites_capture(chart_type = "stacked_bar", template_override = "template_h_bar.pptx")
+  expect_equal(e_manual$template_override, "template_h_bar.pptx")
+  # No manual pick -> "" (explicit auto), still a present field so a live
+  # rebuild treats it as "the user wanted auto", distinct from an older
+  # favorite that predates the field entirely (no key at all).
+  e_auto <- favorites_capture(chart_type = "stacked_bar")
+  expect_equal(e_auto$template_override, "")
+})
+
+test_that("favorites_prepare_live_spec applies the favorite's stored template, not the live picker's default", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    session <- fake_session()
+    # Live chart reports auto (template_override = ""), which for stacked_bar
+    # would resolve to template_v_bar_stacked.pptx.
+    register_live_chart(session, "revenue_dl")
+    entry <- list(label = "Revenue", module_id = "revenue_dl",
+                  template_override = "template_h_bar.pptx")
+
+    spec <- favorites_prepare_live_spec(entry, session, templates_dir = templates_dir)
+    expect_equal(basename(spec$template_path), "template_h_bar.pptx")
+  })
+})
+
+test_that("favorites_prepare_live_spec falls back to the live template for a favorite predating the stored field", {
+  skip_if_not(have_templates, "templates directory not available")
+  with_history_dir({
+    session <- fake_session()
+    register_live_chart(session, "revenue_dl", overrides = list(template_override = "template_h_bar.pptx"))
+    entry <- list(label = "Revenue", module_id = "revenue_dl")  # no template_override key
+
+    spec <- favorites_prepare_live_spec(entry, session, templates_dir = templates_dir)
+    expect_equal(basename(spec$template_path), "template_h_bar.pptx")
+  })
+})
+
 test_that("favorites_build_raw_xlsx with no favorites still writes a valid workbook", {
   path <- tempfile(fileext = ".xlsx")
   favorites_build_raw_xlsx(path, entries = list(), session = fake_session())

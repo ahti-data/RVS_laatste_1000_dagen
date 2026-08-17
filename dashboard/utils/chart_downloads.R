@@ -960,7 +960,12 @@ chart_data_downloads_server <- function(
           selections        = tc_ctx_selections(module_id = id),
           module_id         = id,
           filename_prefix   = filename_prefix,
-          dictionary_format = isTRUE(input$dictionary_format)
+          dictionary_format = isTRUE(input$dictionary_format),
+          # The slide template chosen for this chart right now (manual pick, or
+          # "" for auto-detect) -- persisted on the favorite so a later
+          # download uses the template the user actually picked, not whatever
+          # the live picker has reset to. See favorites_capture().
+          template_override = slide_effective_override()
         )
         favorites_add(entry)
         favorite_status_rv(sprintf("Saved '%s' to favorites.", entry$label))
