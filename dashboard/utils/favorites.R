@@ -823,41 +823,32 @@ favorites_selections_inline <- function(selections, max_chars = 160) {
   out
 }
 
-#' A small coloured "Dictionary: on/off" badge for a Favorites/Export History
-#' row, from a stored `dictionary_format` flag. `NULL`/absent renders nothing
-#' (older entries saved before the flag existed simply show no badge).
-#' @param dictionary_format Logical (or `NULL`).
-#' @param note Optional qualifier appended in parentheses (e.g. "at star time"
-#'   for a favorite, since a favorite rebuilds live at download time).
-tc_dictionary_badge_ui <- function(dictionary_format, note = NULL) {
-  if (is.null(dictionary_format) || length(dictionary_format) != 1 || is.na(dictionary_format)) {
-    return(NULL)
-  }
-  on <- isTRUE(dictionary_format)
-  label <- paste0("Dictionary: ", if (on) "on" else "off",
-                  if (!is.null(note) && nzchar(note)) paste0(" (", note, ")") else "")
-  shiny::tags$span(
-    style = paste0(
-      "display:inline-block; font-size:10px; font-weight:600; padding:1px 6px; ",
-      "border-radius:8px; margin-left:6px; vertical-align:middle; ",
-      if (on) "background:#DCFCE7; color:#166534;" else "background:#F3F4F6; color:#6B7280;"
-    ),
-    label
-  )
-}
-
 #' Full, untruncated selection list for a Favorites/Export History row, as a
 #' native collapsible `<details>` block (same pattern the Dictionary tab
 #' uses) -- so every selected parameter is visible on demand without the
 #' truncation [favorites_selections_inline()] applies to the always-visible
-#' one-line summary. Optionally also lists a stored dictionary crosswalk
-#' (raw -> pretty relabels actually applied) inside the same block.
+#' one-line summary. "Format from dictionary" is listed here as just another
+#' parameter (`dictionary_format`), alongside the chart's own selections,
+#' rather than a separate always-visible badge -- there's nothing special
+#' about it relative to any other option a chart was downloaded/starred with.
+#' Optionally also lists a stored dictionary crosswalk (raw -> pretty relabels
+#' actually applied) inside the same block.
 #' @param selections Named list of option selections.
 #' @param crosswalk Optional named character vector / list of raw -> pretty
 #'   pairs (an export-history entry's stored `dictionary_crosswalk`).
+#' @param dictionary_format Optional logical -- the "Format from dictionary"
+#'   checkbox state (at star/download time). `NULL`/`NA`/absent omits the row
+#'   entirely (older entries saved before the flag existed).
 #' @return A `<details>` tag, or `NULL` when there's nothing to show.
-tc_selections_details_ui <- function(selections, crosswalk = NULL) {
+tc_selections_details_ui <- function(selections, crosswalk = NULL, dictionary_format = NULL) {
   rows <- list()
+  if (!is.null(dictionary_format) && length(dictionary_format) == 1 && !is.na(dictionary_format)) {
+    rows[[length(rows) + 1]] <- shiny::tags$div(
+      style = "font-size:11px; color:#374151; padding:1px 0;",
+      shiny::tags$span(style = "color:#9CA3AF;", "Dictionary: "),
+      if (isTRUE(dictionary_format)) "on" else "off"
+    )
+  }
   if (!is.null(selections) && length(selections) > 0) {
     nm <- names(selections)
     if (is.null(nm)) nm <- paste0("option_", seq_along(selections))
@@ -995,7 +986,18 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
               if (nzchar(tc_or(e$created_at, ""))) paste0("Saved: ", e$created_at)
             )), collapse = " · ")
           ),
-          tc_selections_details_ui(e$selections)
+          # The slide template this favorite will export with (persisted at
+          # star time -- see favorites_capture()). Only shown for favorites
+          # that carry the field; older ones simply omit the line.
+          if (!is.null(e$template_override)) shiny::tags$div(
+            style = "font-size:11px; color:#9CA3AF;",
+            "Template: ",
+            shiny::tags$span(
+              style = "color:#6B7280;",
+              if (nzchar(e$template_override)) basename(e$template_override) else "auto (detected)"
+            )
+          ),
+          tc_selections_details_ui(e$selections, dictionary_format = e$dictionary_format)
         )
         shiny::tags$div(
           style = paste(
@@ -1010,9 +1012,6 @@ favorites_panel_server <- function(id, poll_interval_ms = 2000, tab_label_filter
             ),
             shiny::tags$div(
               shiny::tags$strong(tc_or(e$label, "(untitled)")),
-              # Reflects the checkbox when this favorite was starred; a live
-              # rebuild at download time uses the chart's current checkbox.
-              tc_dictionary_badge_ui(e$dictionary_format, note = "at star time"),
               details
             )
           ),

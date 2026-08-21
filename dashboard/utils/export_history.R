@@ -893,7 +893,6 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
           shiny::tags$div(
             shiny::tags$strong(tc_or(e$label, "(untitled)")),
             shiny::tags$code(style = "font-size:11px; margin-left:8px; color:#6B7280;", tc_or(e$id, "")),
-            tc_dictionary_badge_ui(e$dictionary_format),
             shiny::tags$div(
               style = "font-size:12px; color:#6B7280;",
               tc_history_entry_subtitle(e)
@@ -911,7 +910,10 @@ export_history_panel_server <- function(id, poll_interval_ms = 2000, display_lim
               shiny::tags$span(style = "color:#9CA3AF;", "Template: "),
               e$template_name
             ),
-            tc_selections_details_ui(e$selections, crosswalk = e$dictionary_crosswalk)
+            tc_selections_details_ui(
+              e$selections, crosswalk = e$dictionary_crosswalk,
+              dictionary_format = e$dictionary_format
+            )
           )
         )
       )

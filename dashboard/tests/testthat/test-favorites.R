@@ -230,6 +230,30 @@ test_that("favorites_selections_inline renders a compact, truncated one-liner", 
   expect_equal(substr(long, nchar(long), nchar(long)), intToUtf8(0x2026))
 })
 
+test_that("tc_selections_details_ui lists dictionary_format as a plain parameter row, not a separate badge", {
+  html_on  <- as.character(tc_selections_details_ui(list(jaar = "2023"), dictionary_format = TRUE))
+  html_off <- as.character(tc_selections_details_ui(list(jaar = "2023"), dictionary_format = FALSE))
+  html_na  <- as.character(tc_selections_details_ui(list(jaar = "2023"), dictionary_format = NULL))
+
+  expect_true(grepl("Dictionary:", html_on, fixed = TRUE))
+  # htmltools pretty-prints with whitespace/newlines around text nodes, so
+  # match "on"/"off" as a standalone token rather than requiring it to be
+  # immediately adjacent to its surrounding tags.
+  expect_true(grepl("\\bon\\b", html_on))
+  expect_true(grepl("\\boff\\b", html_off))
+  # No stored flag (an older entry) -- no Dictionary row at all, and no
+  # "(at star time)"-style qualifier anywhere in the output.
+  expect_false(grepl("Dictionary:", html_na, fixed = TRUE))
+  expect_false(grepl("at star time", html_on, fixed = TRUE))
+
+  # Counted alongside the chart's own selections in "Show all selections (N)"
+  # -- both on and off render a Dictionary row (only a missing/NA flag omits
+  # it entirely), so both count as 2 alongside the one "jaar" selection.
+  expect_true(grepl("Show all selections (2)", html_on, fixed = TRUE))
+  expect_true(grepl("Show all selections (2)", html_off, fixed = TRUE))
+  expect_true(grepl("Show all selections (1)", html_na, fixed = TRUE))
+})
+
 test_that("favorites_table_as_df passes a live data.frame through unchanged", {
   df <- sample_df()
   expect_identical(favorites_table_as_df(df), df)
