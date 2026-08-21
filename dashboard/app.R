@@ -7227,8 +7227,7 @@ options(shiny.error = function() {
   writeLines(sprintf("[shiny.error] %s", err), con = "shiny_error.log")
 })
 
-if (exists("secure_app", mode = "function") && exists("secure_server", mode = "function")) {
-  shinyApp(ui = secure_app(ui), server = server)
-} else {
-  shinyApp(ui, server)
-}
+# Access is gated at the reverse proxy in front of this Shiny process
+# (Authelia + LLDAP on healthinsights.ahti.nl) -- every request is already
+# authenticated before it reaches here, so the app needs no login of its own.
+shinyApp(ui, server)
