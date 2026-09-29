@@ -1,0 +1,35 @@
+name: Preview prune
+
+# Safety net for preview.yml: every night, remove previews whose pull request is no longer open
+# (e.g. a "closed" event that never ran) and rebuild the overview page.
+
+on:
+  schedule:
+    - cron: '17 2 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  prune:
+    name: 🧹 Prune previews
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 🧹 Remove previews of closed PRs
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        APP_FOLDER: RVS_tool
+        SSHPASS: ${{ secrets.FTP_PASSWORD }}
+        SSH_USER: ${{ secrets.FTP_USERNAME }}
+        SSH_HOST: ${{ secrets.FTP_SERVER }}
+      run: |
+        # If this call fails the step stops, so a GitHub outage can never look like "no open PRs".
+        OPEN_PRS="$(gh pr list --state open --limit 200 --json number --jq '.[].number' | tr '\n' ' ')"
+        export OPEN_PRS
+        sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+        bash .github/scripts/preview.sh prune

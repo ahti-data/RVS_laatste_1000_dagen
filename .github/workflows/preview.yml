@@ -1,0 +1,84 @@
+name: Preview deploy
+
+# One preview per open pull request, at <base url>/preview/RVS_tool--pr-<number>/, listed on the
+# overview page <base url>/preview/. Removed again when the PR is closed or merged; preview-prune.yml
+# is the nightly safety net. Uses the same FTP_* secrets as the production deploy (nothing to install
+# on the server); all the work is in .github/scripts/preview.sh.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, closed]
+    branches:
+      - main
+
+concurrency:
+  group: preview-${{ github.event.number }}
+  cancel-in-progress: false
+
+env:
+  APP_FOLDER: RVS_tool   # same folder name as in deploy.yml
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  deploy:
+    name: 🔍 Deploy preview
+    # PRs from forks don't get secrets, so they can't be previewed.
+    if: github.event.action != 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: 🚚 Upload preview and refresh overview
+      shell: bash
+      env:
+        SSHPASS: ${{ secrets.FTP_PASSWORD }}
+        SSH_USER: ${{ secrets.FTP_USERNAME }}
+        SSH_HOST: ${{ secrets.FTP_SERVER }}
+        PR_NUMBER: ${{ github.event.number }}
+        PR_TITLE: ${{ github.event.pull_request.title }}
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        SRC_DIR: dashboard
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+        bash .github/scripts/preview.sh deploy
+
+    - name: 💬 Post preview link on the PR
+      uses: actions/github-script@v7
+      env:
+        BASE_URL: ${{ vars.PREVIEW_BASE_URL || 'https://healthinsights.ahti.nl' }}
+      with:
+        script: |
+          const name = `${process.env.APP_FOLDER}--pr-${context.payload.number}`;
+          const url = `${process.env.BASE_URL}/preview/${name}/`;
+          const marker = '<!-- dashboard-preview -->';
+          const body = `${marker}\n🔍 **Preview:** ${url}\n\nAlle previews: ${process.env.BASE_URL}/preview/\n\n` +
+            `Updated for commit \`${context.payload.pull_request.head.sha.slice(0, 7)}\`. ` +
+            `Log in with your usual account. It uses the live data of the dashboard and is removed when this PR is closed.`;
+          const { owner, repo } = context.repo;
+          const issue_number = context.payload.number;
+          const comments = await github.paginate(github.rest.issues.listComments, { owner, repo, issue_number });
+          const existing = comments.find(c => c.body && c.body.startsWith(marker));
+          if (existing) {
+            await github.rest.issues.updateComment({ owner, repo, comment_id: existing.id, body });
+          } else {
+            await github.rest.issues.createComment({ owner, repo, issue_number, body });
+          }
+
+  cleanup:
+    name: 🧹 Remove preview
+    if: github.event.action == 'closed' && github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+    - name: 🗑️ Delete preview and refresh overview
+      shell: bash
+      env:
+        SSHPASS: ${{ secrets.FTP_PASSWORD }}
+        SSH_USER: ${{ secrets.FTP_USERNAME }}
+        SSH_HOST: ${{ secrets.FTP_SERVER }}
+        PR_NUMBER: ${{ github.event.number }}
+      run: |
+        sudo apt-get update -qq && sudo apt-get install -y -qq sshpass
+        bash .github/scripts/preview.sh delete

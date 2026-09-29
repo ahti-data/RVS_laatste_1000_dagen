@@ -1,0 +1,29 @@
+{
+  "permissions": {
+    "deny": [
+      "Bash(git push origin main)",
+      "Bash(git push origin main:*)",
+      "Bash(git push origin master:*)",
+      "Bash(git push origin HEAD:main:*)",
+      "Bash(git push origin HEAD:master:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(git push --force-with-lease:*)",
+      "Bash(git push --delete:*)",
+      "Bash(git push --mirror:*)",
+      "Bash(git push --tags:*)",
+      "Bash(gh pr merge:*)",
+      "Bash(gh api:*)",
+      "Edit(.github/**)",
+      "Write(.github/**)",
+      "Edit(.claude/**)",
+      "Write(.claude/**)",
+      "Edit(dashboard/data/**)",
+      "Write(dashboard/data/**)",
+      "Edit(output_src/**)",
+      "Write(output_src/**)",
+      "Edit(outputs/**)",
+      "Write(outputs/**)"
+    ]
+  }
+}

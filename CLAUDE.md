@@ -61,6 +61,17 @@ work done.
 - `dashboard/tests/testthat/` — testthat tests.
 - `output_src/` — the R pipeline that generates the aggregated `.xlsx` outputs consumed by the dashboard.
 
+## Project managers working in this repo
+
+Project managers (non-analysts) may propose dashboard changes with Claude. Their flow is in
+`docs/projectmanagers.md`: work on a `pm/...` branch, never on `main`, push the branch, open a PR, and
+look at the automatic preview (`/preview/`, deployed by `.github/workflows/preview.yml` via
+`.github/scripts/preview.sh` to `/apps/preview/RVS_tool--pr-<n>/`, linked to the live `RVS_tool` data,
+same `FTP_*` secrets as the deploy; see the template repo's CLAUDE.md). PM-only safety rules (no push
+to `main`, no `gh pr merge`, no edits to `dashboard/data/`, `outputs/`, `output_src/`, `.github/`) are
+installed per person by `.claude/pm/setup-pm.ps1`. If a user says they are a project manager, keep to
+that flow: branch first, push only that branch, never merge for them. These rules only restrict Claude.
+
 ## Conventions
 
 - Add reusable logic to `dashboard/utils/`, not inline in `app.R`.
